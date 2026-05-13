@@ -1,0 +1,119 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x"]
+}
+
+// ─── ENUMS ───────────────────────────────────────
+enum UserRole {
+  USER
+  OPERATOR
+  ADMIN
+}
+
+enum TransportType {
+  LOUAGE
+  BUS
+  TRANSPORTER
+}
+
+// ─── MODELS ──────────────────────────────────────
+model User {
+  id          String    @id @default(cuid())
+  username    String    @unique
+  email       String?   @unique
+  phone       String?
+  password    String
+  displayName String
+  role        UserRole  @default(USER)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  trips       Trip[]
+  notifications Notification[]
+}
+
+model Station {
+  id                String       @id @default(cuid())
+  name              String
+  city              String
+  lat               Float
+  lng               Float
+  createdAt         DateTime     @default(now())
+  louageTrips       LouageTrip[] @relation("LouageStation")
+  busDepartureTrips BusTrip[]    @relation("DepartureStation")
+  busArrivalTrips   BusTrip[]    @relation("ArrivalStation")
+}
+
+model Trip {
+  id              String           @id @default(cuid())
+  type            TransportType
+  operator        User             @relation(fields: [operatorId], references: [id])
+  operatorId      String
+  operatorName    String
+  fromCity        String
+  toCity          String
+  departureTime   DateTime
+  arrivalTime     DateTime
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  louageTrip      LouageTrip?
+  busTrip         BusTrip?
+  transporterTrip TransporterTrip?
+}
+
+model LouageTrip {
+  id                String   @id @default(cuid())
+  trip              Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripId            String   @unique
+  station           Station? @relation("LouageStation", fields: [stationId], references: [id])
+  stationId         String?
+  customStationName String?
+  price             Float
+  totalSeats        Int      @default(8)
+  availableSeats    Int
+  isFull            Boolean  @default(false)
+  vehicleNumber     String?
+  contactInfo       String?
+}
+
+model BusTrip {
+  id                         String   @id @default(cuid())
+  trip                       Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripId                     String   @unique
+  departureStation           Station? @relation("DepartureStation", fields: [departureStationId], references: [id])
+  departureStationId         String?
+  arrivalStation             Station? @relation("ArrivalStation", fields: [arrivalStationId], references: [id])
+  arrivalStationId           String?
+  customDepartureStationName String?
+  customArrivalStationName   String?
+  price                      Float
+  totalSeats                 Int
+  availableSeats             Int
+}
+
+model TransporterTrip {
+  id             String   @id @default(cuid())
+  trip           Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripId         String   @unique
+  contactInfo    String
+  vehicleType    String
+  availableSpace String
+  eta            String
+  route          String[]
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  type      String
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  data      Json?
+  createdAt DateTime @default(now())
+}
