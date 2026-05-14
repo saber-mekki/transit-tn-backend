@@ -8,10 +8,10 @@ export const router = Router();
 
 // ─── POST /api/auth/signup ───────────────────────
 router.post('/signup', async (req: Request, res: Response) => {
-  const { username, password, displayName, role, email, phone } = req.body;
+  const { password, displayName, role, email, phone } = req.body;
 
-  if (!username || !password || !displayName || !role) {
-    return res.status(400).json({ message: 'username, password, displayName and role are required' });
+  if (!email || !password || !displayName || !role) {
+    return res.status(400).json({ message: 'email, password, displayName and role are required' });
   }
   if (password.length < 8) {
     return res.status(400).json({ message: 'Password must be at least 8 characters' });
@@ -22,29 +22,30 @@ router.post('/signup', async (req: Request, res: Response) => {
   }
 
   try {
-    const existing = await prisma.user.findUnique({ where: { username } });
-    if (existing) {
-      return res.status(409).json({ message: 'Username already taken' });
-    }
-    if (email) {
-      const emailTaken = await prisma.user.findUnique({ where: { email } });
-      if (emailTaken) return res.status(409).json({ message: 'Email already in use' });
+    const emailTaken = await prisma.user.findUnique({ where: { email } });
+    if (emailTaken) return res.status(409).json({ message: 'Email already in use' });
+
+    // Auto-generate username from email
+    const baseUsername = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+    let username = baseUsername;
+    let count = 1;
+    while (await prisma.user.findUnique({ where: { username } })) {
+      username = `${baseUsername}${count++}`;
     }
 
     const hashed = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
-      data: { username, password: hashed, displayName, role: role.toUpperCase() as UserRole, email: email || null, phone: phone || null },
+      data: { username, password: hashed, displayName, role: role.toUpperCase() as UserRole, email, phone: phone || null },
       select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, createdAt: true },
     });
 
-    // Notify all admins with full user info
+    // Notify all admins
     const admins = await prisma.user.findMany({ where: { role: 'ADMIN' } });
     const roleLabel = user.role === 'OPERATOR' ? '🚗 Driver / Operator' : '👤 Passenger';
     const details = [
       `👤 Name: ${user.displayName}`,
-      `🔑 Username: @${user.username}`,
+      `📧 Email: ${user.email}`,
       `🎭 Role: ${roleLabel}`,
-      user.email ? `📧 Email: ${user.email}` : null,
       user.phone ? `📞 Phone: ${user.phone}` : null,
       `🕐 Joined: ${new Date().toLocaleString()}`,
     ].filter(Boolean).join('\n');
@@ -69,13 +70,16 @@ router.post('/signup', async (req: Request, res: Response) => {
 
 // ─── POST /api/auth/login ────────────────────────
 router.post('/login', async (req: Request, res: Response) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ message: 'Username and password are required' });
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
   }
 
   try {
-    const user = await prisma.user.findUnique({ where: { username } });
+    // Support both email and username login
+    const user = await prisma.user.findFirst({
+      where: { OR: [{ email }, { username: email }] }
+    });
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
 
     const valid = await bcrypt.compare(password, user.password);
