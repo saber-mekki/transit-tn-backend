@@ -11,6 +11,7 @@ import { router as stationRoutes }       from './routes/stations';
 import { router as locationRoutes }      from './routes/locations';
 import { router as notificationRoutes }  from './routes/notifications';
 import { router as aiRoutes }             from './routes/ai';
+import verifyRoutes                        from './routes/verify';
 
 dotenv.config();
 
@@ -60,6 +61,7 @@ app.get('/health', (_req, res) => {
 // ─── API ROUTES ──────────────────────────────────
 app.use('/api/auth',          authLimiter, authRoutes);
 app.use('/api/ai',            aiRoutes);
+app.use('/api/verify',         verifyRoutes);
 app.use('/api/users',         userRoutes);
 app.use('/api/trips',         tripRoutes);
 app.use('/api/stations',      stationRoutes);
