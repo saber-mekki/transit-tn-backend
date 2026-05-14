@@ -94,6 +94,50 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
+
+// ─── POST /api/auth/google ────────────────────────
+router.post('/google', async (req: Request, res: Response) => {
+  const { email, displayName, googleId } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email required' });
+
+  try {
+    let user = await prisma.user.findFirst({ where: { email } });
+    
+    if (!user) {
+      // Auto-create account
+      const baseUsername = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+      let username = baseUsername;
+      let count = 1;
+      while (await prisma.user.findUnique({ where: { username } })) {
+        username = `${baseUsername}${count++}`;
+      }
+      const randomPw = await bcrypt.hash(Math.random().toString(36), 12);
+      user = await prisma.user.create({
+        data: { username, password: randomPw, displayName: displayName || email.split('@')[0], role: 'USER', email }
+      });
+
+      // Notify admins
+      const admins = await prisma.user.findMany({ where: { role: 'ADMIN' } });
+      await prisma.notification.createMany({
+        data: admins.map(admin => ({
+          userId: admin.id,
+          type: 'NEW_USER',
+          title: '🆕 New user registered (Google)',
+          message: `👤 Name: ${user!.displayName}\n📧 Email: ${user!.email}\n🔑 Via: Google Sign-In`,
+          data: { userId: user!.id, role: user!.role },
+        })),
+      });
+    }
+
+    const { password: _, ...safeUser } = user;
+    const token = generateToken({ id: user.id, role: user.role, username: user.username });
+    return res.json({ user: safeUser, token });
+  } catch (error) {
+    console.error('Google auth error:', error);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ─── GET /api/auth/me ────────────────────────────
 router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   try {
