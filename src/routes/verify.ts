@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { Resend } from 'resend';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { Resend } = require('resend');
 
 const router = Router();
 const prisma = new PrismaClient();
