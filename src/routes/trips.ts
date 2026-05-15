@@ -26,7 +26,7 @@ function formatTrip(trip: any) {
 // ─── GET /api/trips ──────────────────────────────
 router.get('/', async (req: Request, res: Response) => {
   const { type, fromCity, toCity } = req.query;
-  const where: any = {};
+  const where: any = { status: { not: 'COMPLETED' } };
   if (type) where.type = (type as string).toUpperCase() as TransportType;
   if (fromCity) where.fromCity = { contains: fromCity as string, mode: 'insensitive' };
   if (toCity)   where.toCity   = { contains: toCity   as string, mode: 'insensitive' };
@@ -192,4 +192,77 @@ router.delete('/:id', authenticate, requireOperator, async (req: AuthRequest, re
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Error deleting trip' });
   }
+});
+
+// ─── PUT /api/trips/:id/complete ─────────────────
+router.put('/:id/complete', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const trip = await prisma.trip.findUnique({ where: { id: req.params.id } });
+    if (!trip) return res.status(404).json({ message: 'Trip not found' });
+    if (req.user?.role !== 'ADMIN' && trip.operatorId !== req.user?.id)
+      return res.status(403).json({ message: 'Forbidden' });
+    const updated = await prisma.trip.update({
+      where: { id: req.params.id },
+      data: { status: 'COMPLETED', completedAt: new Date() }
+    });
+    return res.json(updated);
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
+
+// ─── GET /api/trips/history ───────────────────────
+router.get('/history', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const where = req.user?.role === 'ADMIN'
+      ? { status: 'COMPLETED' as any }
+      : { status: 'COMPLETED' as any, operatorId: req.user?.id };
+    const trips = await prisma.trip.findMany({
+      where,
+      include: {
+        ...INCLUDE_ALL,
+        operator: { select: { displayName: true, email: true } },
+        ratings: true
+      },
+      orderBy: { completedAt: 'desc' },
+      take: 100
+    });
+    return res.json(trips.map(t => ({
+      ...formatTrip(t),
+      operatorInfo: t.operator,
+      avgRating: t.ratings.length ? (t.ratings.reduce((a: number, r: any) => a + r.score, 0) / t.ratings.length).toFixed(1) : null,
+      ratingCount: t.ratings.length
+    })));
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
+
+// ─── POST /api/trips/:id/rate ─────────────────────
+router.post('/:id/rate', authenticate, async (req: AuthRequest, res: Response) => {
+  const { score, comment } = req.body;
+  if (!score || score < 1 || score > 5)
+    return res.status(400).json({ message: 'Score must be 1-5' });
+  try {
+    const trip = await prisma.trip.findUnique({ where: { id: req.params.id } });
+    if (!trip) return res.status(404).json({ message: 'Trip not found' });
+    if (trip.status !== 'COMPLETED')
+      return res.status(400).json({ message: 'Can only rate completed trips' });
+    const existing = await prisma.rating.findFirst({
+      where: { tripId: req.params.id, userId: req.user!.id }
+    });
+    if (existing) return res.status(409).json({ message: 'Already rated' });
+    const rating = await prisma.rating.create({
+      data: { tripId: req.params.id, userId: req.user!.id, score, comment: comment || null }
+    });
+    return res.status(201).json(rating);
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
+
+// ─── GET /api/trips/:id/ratings ──────────────────
+router.get('/:id/ratings', async (req: Request, res: Response) => {
+  try {
+    const ratings = await prisma.rating.findMany({
+      where: { tripId: req.params.id },
+      orderBy: { createdAt: 'desc' }
+    });
+    const avg = ratings.length ? (ratings.reduce((a, r) => a + r.score, 0) / ratings.length).toFixed(1) : null;
+    return res.json({ ratings, avg, count: ratings.length });
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
