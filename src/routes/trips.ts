@@ -39,6 +39,23 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 // ─── GET /api/trips/:id ──────────────────────────
+// ─── GET /api/trips/history ───────────────────────
+router.get('/history', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const where = req.user?.role === 'ADMIN'
+      ? { status: 'COMPLETED' as any }
+      : { status: 'COMPLETED' as any, operatorId: req.user?.id };
+    const trips = await prisma.trip.findMany({
+      where,
+      include: {
+        ...INCLUDE_ALL,
+        operator: { select: { displayName: true, email: true } },
+        ratings: true
+      },
+      orderBy: { completedAt: 'desc' },
+      take: 100
+    });
+
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const trip = await prisma.trip.findUnique({ where: { id: req.params.id }, include: INCLUDE_ALL });
@@ -209,22 +226,6 @@ router.put('/:id/complete', authenticate, async (req: AuthRequest, res: Response
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
 
-// ─── GET /api/trips/history ───────────────────────
-router.get('/history', authenticate, async (req: AuthRequest, res: Response) => {
-  try {
-    const where = req.user?.role === 'ADMIN'
-      ? { status: 'COMPLETED' as any }
-      : { status: 'COMPLETED' as any, operatorId: req.user?.id };
-    const trips = await prisma.trip.findMany({
-      where,
-      include: {
-        ...INCLUDE_ALL,
-        operator: { select: { displayName: true, email: true } },
-        ratings: true
-      },
-      orderBy: { completedAt: 'desc' },
-      take: 100
-    });
     return res.json(trips.map(t => ({
       ...formatTrip(t),
       operatorInfo: t.operator,
