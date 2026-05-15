@@ -13,6 +13,7 @@ import { router as notificationRoutes }  from './routes/notifications';
 import { router as aiRoutes }             from './routes/ai';
 import verifyRoutes                        from './routes/verify';
 import { router as bannerRoutes }           from './routes/banners';
+import { router as operatorRatingRoutes }   from './routes/operatorRatings';
 
 dotenv.config();
 
@@ -64,6 +65,7 @@ app.use('/api/auth',          authLimiter, authRoutes);
 app.use('/api/ai',            aiRoutes);
 app.use('/api/verify',         verifyRoutes);
 app.use('/api/banners',        bannerRoutes);
+app.use('/api/operators',      operatorRatingRoutes);
 app.use('/api/users',         userRoutes);
 app.use('/api/trips',         tripRoutes);
 app.use('/api/stations',      stationRoutes);

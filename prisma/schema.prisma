@@ -38,6 +38,7 @@ model User {
   role        UserRole  @default(USER)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  operatorRatings OperatorRating[] @relation("OperatorRatings")
   trips       Trip[]
   notifications Notification[]
 }
@@ -150,6 +151,16 @@ model Rating {
   id          String   @id @default(cuid())
   trip        Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
   tripId      String
+  userId      String
+  score       Int
+  comment     String?
+  createdAt   DateTime @default(now())
+}
+
+model OperatorRating {
+  id          String   @id @default(cuid())
+  operator    User     @relation("OperatorRatings", fields: [operatorId], references: [id], onDelete: Cascade)
+  operatorId  String
   userId      String
   score       Int
   comment     String?
