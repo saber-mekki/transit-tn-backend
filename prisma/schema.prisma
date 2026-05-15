@@ -114,6 +114,7 @@ model TransporterTrip {
   vehicleType    String
   availableSpace String
   eta            String
+  pricePerKg     Float?
   route          String[]
 }
 
