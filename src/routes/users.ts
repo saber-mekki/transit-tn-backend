@@ -26,16 +26,20 @@ router.get('/', requireAdmin, async (req: AuthRequest, res: Response) => {
 // ─── GET /api/users/:id ──────────────────────────
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
-  // Users can only see their own profile; admins see all
-  if (req.user!.role !== 'ADMIN' && req.user!.id !== id) {
-    return res.status(403).json({ message: 'Forbidden' });
-  }
   try {
     const user = await prisma.user.findUnique({
       where: { id },
-      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, createdAt: true },
+      select: { id: true, username: true, displayName: true, role: true, phone: true, bio: true, createdAt: true },
     });
     if (!user) return res.status(404).json({ message: 'User not found' });
+    // Only return public info for operators, full info for own profile/admin
+    if (req.user?.role === 'ADMIN' || req.user?.id === id) {
+      const full = await prisma.user.findUnique({
+        where: { id },
+        select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true },
+      });
+      return res.json(full);
+    }
     return res.json(user);
   } catch (error) {
     return res.status(500).json({ message: 'Error fetching user' });
