@@ -33,6 +33,7 @@ model User {
   username    String    @unique
   email       String?   @unique
   phone       String?
+  bio         String?
   password    String
   displayName String
   role        UserRole  @default(USER)
