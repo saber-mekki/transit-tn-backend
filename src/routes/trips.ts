@@ -25,9 +25,10 @@ function formatTrip(trip: any) {
 
 // ─── GET /api/trips ──────────────────────────────
 router.get('/', async (req: Request, res: Response) => {
-  const { type, fromCity, toCity } = req.query;
+  const { type, fromCity, toCity, operatorId } = req.query;
   const where: any = { status: { not: 'COMPLETED' } };
   if (type) where.type = (type as string).toUpperCase() as TransportType;
+  if (operatorId) where.operatorId = operatorId as string;
   if (fromCity) where.fromCity = { contains: fromCity as string, mode: 'insensitive' };
   if (toCity)   where.toCity   = { contains: toCity   as string, mode: 'insensitive' };
   try {
