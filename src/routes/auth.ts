@@ -138,6 +138,27 @@ router.post('/google', async (req: Request, res: Response) => {
   }
 });
 
+
+// ─── POST /api/auth/reset-password ────────────────
+router.post('/reset-password', async (req: Request, res: Response) => {
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) {
+    return res.status(400).json({ message: 'Email and new password required' });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ message: 'Password must be at least 8 characters' });
+  }
+  try {
+    const user = await prisma.user.findFirst({ where: { OR: [{ email }, { username: email }] } });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const hashed = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
+    return res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ─── GET /api/auth/me ────────────────────────────
 router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   try {
