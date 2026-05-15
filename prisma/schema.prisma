@@ -125,3 +125,14 @@ model EmailVerification {
   expiresAt DateTime
   createdAt DateTime @default(now())
 }
+
+model Banner {
+  id        String   @id @default(cuid())
+  imageUrl  String
+  title     String?
+  subtitle  String?
+  link      String?
+  active    Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+}
