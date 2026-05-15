@@ -159,6 +159,27 @@ router.post('/reset-password', async (req: Request, res: Response) => {
   }
 });
 
+
+// ─── PUT /api/auth/profile ────────────────────────
+router.put('/profile', authenticate, async (req: AuthRequest, res: Response) => {
+  const { displayName, email, phone } = req.body;
+  if (!displayName) return res.status(400).json({ message: 'Name required' });
+  try {
+    if (email) {
+      const existing = await prisma.user.findFirst({ where: { email, NOT: { id: req.user!.id } } });
+      if (existing) return res.status(409).json({ message: 'Email already in use' });
+    }
+    const user = await prisma.user.update({
+      where: { id: req.user!.id },
+      data: { displayName, email: email || null, phone: phone || null },
+      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, createdAt: true }
+    });
+    return res.json(user);
+  } catch (error) {
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ─── GET /api/auth/me ────────────────────────────
 router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   try {
