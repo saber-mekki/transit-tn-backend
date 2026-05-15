@@ -19,12 +19,12 @@ router.post('/chat', async (req: Request, res: Response) => {
         transporterTrip: true,
       },
       orderBy: { departureTime: 'asc' },
-      take: 100,
+      take: 30,
     });
 
     // Format trips as readable text for the AI
     const tripsText = allTrips.map(t => {
-      const base = `[${t.type}] ${t.fromCity} → ${t.toCity} | Operator: ${t.operatorName} | Departure: ${new Date(t.departureTime).toLocaleString()}`;
+      const base = `[${t.type}] ${t.fromCity}→${t.toCity} | ${t.operatorName} | ${new Date(t.departureTime).toLocaleDateString()}`;
       if (t.louageTrip) {
         return `${base} | Price: ${t.louageTrip.price} TND | Seats: ${t.louageTrip.availableSeats}/${t.louageTrip.totalSeats} | ${t.louageTrip.isFull ? 'FULL' : 'AVAILABLE'} | Station: ${t.louageTrip.station?.name || t.louageTrip.customStationName || 'N/A'}`;
       }
