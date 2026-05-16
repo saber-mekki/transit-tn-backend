@@ -71,6 +71,7 @@ model Trip {
   status          TripStatus       @default(ACTIVE)
   completedAt     DateTime?
   ratings         Rating[]
+  reservations    Reservation[]
   louageTrip      LouageTrip?
   busTrip         BusTrip?
   transporterTrip TransporterTrip?
@@ -167,4 +168,17 @@ model OperatorRating {
   score       Int
   comment     String?
   createdAt   DateTime @default(now())
+}
+
+model Reservation {
+  id          String   @id @default(cuid())
+  trip        Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripId      String
+  userId      String
+  userName    String
+  userPhone   String
+  note        String?
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
