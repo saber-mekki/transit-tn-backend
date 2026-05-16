@@ -29,6 +29,14 @@ router.get('/', async (req: Request, res: Response) => {
   const where: any = { status: { not: 'COMPLETED' } };
   if (type) where.type = (type as string).toUpperCase() as TransportType;
   if (operatorId) where.operatorId = operatorId as string;
+  if (req.query.direction === 'tn-to-intl') {
+    // fromCity is Tunisia (no comma = Tunisia city)
+    where.fromCity = { not: { contains: ',' } };
+  }
+  if (req.query.direction === 'intl-to-tn') {
+    // fromCity contains comma = international
+    where.fromCity = { contains: ',' };
+  }
   if (fromCity) where.fromCity = { contains: fromCity as string, mode: 'insensitive' };
   if (toCity)   where.toCity   = { contains: toCity   as string, mode: 'insensitive' };
   try {
