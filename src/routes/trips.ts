@@ -29,6 +29,14 @@ router.get('/', async (req: Request, res: Response) => {
   const where: any = { status: { not: 'COMPLETED' } };
   if (type) where.type = (type as string).toUpperCase() as TransportType;
   if (operatorId) where.operatorId = operatorId as string;
+
+  // Exclude expired trips (past departure) but keep 2099 demo trips
+  const now = new Date();
+  const year2099 = new Date('2099-01-01');
+  where.OR = [
+    { departureTime: { gte: now } },
+    { departureTime: { gte: year2099 } }
+  ];
   if (req.query.direction === 'tn-to-intl') {
     // fromCity is Tunisia (no comma = Tunisia city)
     where.fromCity = { not: { contains: ',' } };
