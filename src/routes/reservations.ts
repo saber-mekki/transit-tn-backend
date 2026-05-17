@@ -120,3 +120,19 @@ router.put('/:id', authenticate, async (req: AuthRequest, res: Response) => {
     return res.status(500).json({ message: 'Server error' });
   }
 });
+
+// DELETE /api/reservations/:id — user cancels pending reservation
+router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const reservation = await prisma.reservation.findUnique({ where: { id: req.params.id } });
+    if (!reservation) return res.status(404).json({ message: 'Not found' });
+    if (reservation.userId !== req.user!.id && req.user?.role !== 'ADMIN')
+      return res.status(403).json({ message: 'Forbidden' });
+    if (reservation.status !== 'PENDING')
+      return res.status(400).json({ message: 'Can only cancel pending reservations' });
+    await prisma.reservation.delete({ where: { id: req.params.id } });
+    return res.json({ message: 'Cancelled' });
+  } catch (e) {
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
