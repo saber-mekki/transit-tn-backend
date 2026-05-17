@@ -162,7 +162,7 @@ router.post('/reset-password', async (req: Request, res: Response) => {
 
 // ─── PUT /api/auth/profile ────────────────────────
 router.put('/profile', authenticate, async (req: AuthRequest, res: Response) => {
-  const { displayName, email, phone, bio } = req.body;
+  const { displayName, email, phone, bio, pushToken } = req.body;
   if (!displayName) return res.status(400).json({ message: 'Name required' });
   try {
     if (email) {
@@ -171,7 +171,7 @@ router.put('/profile', authenticate, async (req: AuthRequest, res: Response) => 
     }
     const user = await prisma.user.update({
       where: { id: req.user!.id },
-      data: { displayName, email: email || null, phone: phone || null, bio: bio || null },
+      data: { displayName, email: email || null, phone: phone || null, bio: bio || null, pushToken: pushToken || null },
       select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true }
     });
     return res.json(user);

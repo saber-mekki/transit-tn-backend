@@ -1,3 +1,4 @@
+import { sendPushNotification } from '../utils/pushNotification';
 import { Router, Request, Response } from 'express';
 import prisma from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
@@ -31,7 +32,17 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
       }
     });
 
-    // Notify operator
+    // Send push to operator
+    const operatorRecord = await prisma.user.findUnique({ where: { id: trip.operatorId } });
+    if (operatorRecord?.pushToken) {
+      await sendPushNotification(
+        operatorRecord.pushToken,
+        '🔔 Nouvelle réservation',
+        `${user?.displayName} - ${trip.fromCity} → ${trip.toCity}`
+      );
+    }
+
+    // Notify operator (in-app)
     await prisma.notification.create({
       data: {
         userId: trip.operatorId,
@@ -104,7 +115,17 @@ router.put('/:id', authenticate, async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Notify user
+    // Send push notification to user
+    const userRecord = await prisma.user.findUnique({ where: { id: reservation.userId } });
+    if (userRecord?.pushToken) {
+      await sendPushNotification(
+        userRecord.pushToken,
+        status === 'ACCEPTED' ? '✅ Réservation acceptée!' : '❌ Réservation refusée',
+        `${reservation.trip.fromCity} → ${reservation.trip.toCity}`
+      );
+    }
+
+    // Notify user (in-app)
     await prisma.notification.create({
       data: {
         userId: reservation.userId,
