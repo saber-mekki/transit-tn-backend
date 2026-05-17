@@ -25,10 +25,41 @@ function formatTrip(trip: any) {
 
 // ─── GET /api/trips ──────────────────────────────
 router.get('/', async (req: Request, res: Response) => {
-  const { type, fromCity, toCity, operatorId } = req.query;
+  const { type, fromCity, toCity, operatorId, minPrice, maxPrice, minSeats, date, sortBy } = req.query;
   const where: any = { status: { not: 'COMPLETED' } };
   if (type) where.type = (type as string).toUpperCase() as TransportType;
   if (operatorId) where.operatorId = operatorId as string;
+
+  // Price filter (applied on sub-tables via join)
+  // Seats filter
+  if (minSeats) {
+    where.OR = where.OR || [];
+    // filter done post-query for seats since it's in sub-table
+  }
+
+  // Date filter
+  if (date) {
+    const d = new Date(date as string);
+    const nextDay = new Date(d);
+    nextDay.setDate(nextDay.getDate() + 1);
+    // Override the OR to also include date filter
+    where.AND = [
+      {
+        OR: [
+          { departureTime: { gte: new Date() } },
+          { departureTime: { gte: new Date('2099-01-01') } },
+          { type: 'BUS' },
+        ]
+      },
+      {
+        OR: [
+          { departureTime: { gte: d, lt: nextDay } },
+          { departureTime: { gte: new Date('2099-01-01') } },
+        ]
+      }
+    ];
+    delete where.OR;
+  }
 
   // Exclude expired trips but keep: bus trips, 2099 demo trips, future trips
   const now = new Date();
@@ -48,8 +79,16 @@ router.get('/', async (req: Request, res: Response) => {
   if (fromCity) where.fromCity = { contains: fromCity as string, mode: 'insensitive' };
   if (toCity)   where.toCity   = { contains: toCity   as string, mode: 'insensitive' };
   try {
-    const trips = await prisma.trip.findMany({ where, include: INCLUDE_ALL, orderBy: { departureTime: 'asc' } });
-    return res.json(trips.map(formatTrip));
+    const sortByVal = (sortBy as string) || 'time';
+    const orderByClause: any = sortByVal === 'time' ? { departureTime: 'asc' } : { createdAt: 'asc' };
+    const trips = await prisma.trip.findMany({ where, include: INCLUDE_ALL, orderBy: orderByClause });
+    let formatted = trips.map(formatTrip);
+    if (minPrice) formatted = formatted.filter((t: any) => !t.price || t.price >= parseFloat(minPrice as string));
+    if (maxPrice) formatted = formatted.filter((t: any) => !t.price || t.price <= parseFloat(maxPrice as string));
+    if (minSeats) formatted = formatted.filter((t: any) => t.availableSeats == null || t.availableSeats >= parseInt(minSeats as string));
+    if (sortByVal === 'price') formatted.sort((a: any, b: any) => (a.price || 0) - (b.price || 0));
+    if (sortByVal === 'seats') formatted.sort((a: any, b: any) => (b.availableSeats || 0) - (a.availableSeats || 0));
+    return res.json(formatted);
   } catch (error) {
     return res.status(500).json({ message: 'Error fetching trips' });
   }
