@@ -16,6 +16,7 @@ import { router as bannerRoutes }           from './routes/banners';
 import { router as operatorRatingRoutes }   from './routes/operatorRatings';
 import { router as reservationRoutes }      from './routes/reservations';
 import { router as statsRoutes }            from './routes/stats';
+import { router as contactRoutes }          from './routes/contact';
 
 dotenv.config();
 
@@ -70,6 +71,7 @@ app.use('/api/banners',        bannerRoutes);
 app.use('/api/operators',      operatorRatingRoutes);
 app.use('/api/reservations',   reservationRoutes);
 app.use('/api/stats',          statsRoutes);
+app.use('/api/contact',        contactRoutes);
 app.use('/api/users',         userRoutes);
 app.use('/api/trips',         tripRoutes);
 app.use('/api/stations',      stationRoutes);
