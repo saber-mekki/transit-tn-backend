@@ -30,12 +30,12 @@ router.get('/', async (req: Request, res: Response) => {
   if (type) where.type = (type as string).toUpperCase() as TransportType;
   if (operatorId) where.operatorId = operatorId as string;
 
-  // Exclude expired trips (past departure) but keep 2099 demo trips
+  // Exclude expired trips but keep: bus trips, 2099 demo trips, future trips
   const now = new Date();
-  const year2099 = new Date('2099-01-01');
   where.OR = [
-    { departureTime: { gte: now } },
-    { departureTime: { gte: year2099 } }
+    { departureTime: { gte: now } },           // future trips
+    { departureTime: { gte: new Date('2099-01-01') } }, // 2099 demo
+    { type: 'BUS' },                            // all bus trips always visible
   ];
   if (req.query.direction === 'tn-to-intl') {
     // fromCity is Tunisia (no comma = Tunisia city)
