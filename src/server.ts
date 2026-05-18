@@ -11,7 +11,7 @@ import { router as stationRoutes }       from './routes/stations';
 import { router as locationRoutes }      from './routes/locations';
 import { router as notificationRoutes }  from './routes/notifications';
 import { router as aiRoutes }             from './routes/ai';
-import verifyRoutes                        from './routes/verify';
+import { router as verifyRoutes }          from './routes/verify';
 import { router as bannerRoutes }           from './routes/banners';
 import { router as operatorRatingRoutes }   from './routes/operatorRatings';
 import { router as reservationRoutes }      from './routes/reservations';
