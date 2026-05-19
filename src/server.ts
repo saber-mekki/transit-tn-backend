@@ -26,16 +26,7 @@ const PORT = process.env.PORT || 3001;
 // ─── SECURITY MIDDLEWARE ─────────────────────────
 app.use(helmet());
 
-app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://localhost:8081',
-    'http://localhost:19006',
-    'http://localhost:19000',
-    process.env.FRONTEND_URL || '',
-  ],
-  credentials: true,
-}));
+app.use(cors());
 
 // Rate limiting — 100 requests per 15 min per IP
 const limiter = rateLimit({
