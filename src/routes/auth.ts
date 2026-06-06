@@ -215,3 +215,17 @@ router.put('/password', authenticate, async (req: AuthRequest, res: Response) =>
     return res.status(500).json({ message: 'Server error' });
   }
 });
+
+// ─── DELETE /api/auth/account ────────────────────
+router.delete('/account', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    await prisma.notification.deleteMany({ where: { userId: req.user!.id } });
+    await prisma.reservation.deleteMany({ where: { userId: req.user!.id } });
+    await prisma.operatorRating.deleteMany({ where: { userId: req.user!.id } });
+    await prisma.user.delete({ where: { id: req.user!.id } });
+    return res.json({ message: 'Account deleted successfully' });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
