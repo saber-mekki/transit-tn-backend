@@ -218,7 +218,13 @@ router.put('/password', authenticate, async (req: AuthRequest, res: Response) =>
 
 // ─── DELETE /api/auth/account ────────────────────
 router.delete('/account', authenticate, async (req: AuthRequest, res: Response) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ message: 'Password required' });
   try {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ message: 'Incorrect password' });
     await prisma.notification.deleteMany({ where: { userId: req.user!.id } });
     await prisma.reservation.deleteMany({ where: { userId: req.user!.id } });
     await prisma.operatorRating.deleteMany({ where: { userId: req.user!.id } });
