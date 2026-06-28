@@ -87,7 +87,7 @@ router.post('/login', async (req: Request, res: Response) => {
 
     const { password: _, ...safeUser } = user;
     const token = generateToken({ id: user.id, role: user.role, username: user.username });
-    return res.json({ user: safeUser, token });
+    return res.json({ user: safeUser, token, isNew: isNewUser });
   } catch (error) {
     console.error('Login error:', error);
     return res.status(500).json({ message: 'Server error during login' });
@@ -102,6 +102,7 @@ router.post('/google', async (req: Request, res: Response) => {
 
   try {
     let user = await prisma.user.findFirst({ where: { email } });
+    const isNewUser = !user;
     
     if (!user) {
       // Auto-create account
@@ -131,7 +132,7 @@ router.post('/google', async (req: Request, res: Response) => {
 
     const { password: _, ...safeUser } = user;
     const token = generateToken({ id: user.id, role: user.role, username: user.username });
-    return res.json({ user: safeUser, token });
+    return res.json({ user: safeUser, token, isNew: isNewUser });
   } catch (error) {
     console.error('Google auth error:', error);
     return res.status(500).json({ message: 'Server error' });
@@ -233,5 +234,25 @@ router.delete('/account', authenticate, async (req: AuthRequest, res: Response) 
   } catch (error) {
     console.error('Delete account error:', error);
     return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ─── POST /api/auth/update-role ────────────────────────
+router.post('/update-role', async (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: 'Unauthorized' });
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    const { role } = req.body;
+    if (!['USER', 'OPERATOR'].includes(role)) return res.status(400).json({ message: 'Invalid role' });
+    const user = await prisma.user.update({
+      where: { id: decoded.id },
+      data: { role },
+    });
+    const { password: _, ...safeUser } = user;
+    return res.json({ user: safeUser });
+  } catch (e) {
+    return res.status(401).json({ message: 'Invalid token' });
   }
 });
