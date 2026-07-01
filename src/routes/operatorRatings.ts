@@ -35,14 +35,22 @@ router.get('/:id/ratings', async (req: Request, res: Response) => {
       where: { operatorId: req.params.id },
       orderBy: { createdAt: 'desc' },
       take: 50,
-      include: {
-        user: { select: { displayName: true, username: true } }
-      }
     });
+    // Fetch user displayNames manually
+    const userIds = [...new Set(ratings.map(r => r.userId))];
+    const users = await prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, displayName: true, username: true }
+    });
+    const userMap = Object.fromEntries(users.map(u => [u.id, u]));
+    const ratingsWithUser = ratings.map(r => ({
+      ...r,
+      userName: userMap[r.userId]?.displayName || userMap[r.userId]?.username || 'Anonyme'
+    }));
     const avg = ratings.length
       ? (ratings.reduce((a, r) => a + r.score, 0) / ratings.length).toFixed(1)
       : null;
-    return res.json({ ratings, avg, count: ratings.length });
+    return res.json({ ratings: ratingsWithUser, avg, count: ratings.length });
   } catch (e) {
     return res.status(500).json({ message: 'Server error' });
   }
