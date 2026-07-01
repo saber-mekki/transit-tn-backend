@@ -34,7 +34,10 @@ router.get('/:id/ratings', async (req: Request, res: Response) => {
     const ratings = await prisma.operatorRating.findMany({
       where: { operatorId: req.params.id },
       orderBy: { createdAt: 'desc' },
-      take: 50
+      take: 50,
+      include: {
+        user: { select: { displayName: true, username: true } }
+      }
     });
     const avg = ratings.length
       ? (ratings.reduce((a, r) => a + r.score, 0) / ratings.length).toFixed(1)

@@ -41,6 +41,7 @@ model User {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   operatorRatings OperatorRating[] @relation("OperatorRatings")
+  givenRatings    OperatorRating[] @relation("UserRatings")
   trips       Trip[]
   notifications Notification[]
 }
@@ -165,6 +166,7 @@ model OperatorRating {
   id          String   @id @default(cuid())
   operator    User     @relation("OperatorRatings", fields: [operatorId], references: [id], onDelete: Cascade)
   operatorId  String
+  user        User     @relation("UserRatings", fields: [userId], references: [id], onDelete: Cascade)
   userId      String
   score       Int
   comment     String?
