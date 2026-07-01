@@ -299,8 +299,7 @@ router.post('/:id/rate', authenticate, async (req: AuthRequest, res: Response) =
   try {
     const trip = await prisma.trip.findUnique({ where: { id: req.params.id } });
     if (!trip) return res.status(404).json({ message: 'Trip not found' });
-    if (trip.status !== 'COMPLETED')
-      return res.status(400).json({ message: 'Can only rate completed trips' });
+    // Rating allowed for all trips regardless of status
     const existing = await prisma.rating.findFirst({
       where: { tripId: req.params.id, userId: req.user!.id }
     });
