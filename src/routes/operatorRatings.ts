@@ -5,6 +5,43 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 export const router = Router();
 
 // GET /api/operators/leaderboard - MUST be before /:id routes
+
+// GET /api/operators — all operators with trip counts and ratings
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const operators = await prisma.user.findMany({
+      where: { role: 'OPERATOR' },
+      include: {
+        operatorRatings: { select: { score: true } },
+        trips: {
+          where: { status: { not: 'COMPLETED' } },
+          select: { id: true, type: true }
+        }
+      }
+    });
+
+    const result = operators.map(op => ({
+      id: op.id,
+      displayName: op.displayName,
+      username: op.username,
+      ratingCount: op.operatorRatings.length,
+      avgRating: op.operatorRatings.length
+        ? (op.operatorRatings.reduce((a, r) => a + r.score, 0) / op.operatorRatings.length).toFixed(1)
+        : null,
+      tripCount: op.trips.length,
+      hasLouage: op.trips.some(t => t.type === 'LOUAGE'),
+      hasBus: op.trips.some(t => t.type === 'BUS'),
+      hasTransporter: op.trips.some(t => t.type === 'TRANSPORTER'),
+    }))
+    .filter(op => op.tripCount > 0)
+    .sort((a, b) => parseFloat(b.avgRating || '0') - parseFloat(a.avgRating || '0'));
+
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
 router.get('/leaderboard', async (req: Request, res: Response) => {
   try {
     const operators = await prisma.user.findMany({
