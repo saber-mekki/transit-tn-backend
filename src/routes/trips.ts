@@ -9,6 +9,8 @@ const INCLUDE_ALL = {
   louageTrip: { include: { station: true } },
   busTrip: { include: { departureStation: true, arrivalStation: true } },
   transporterTrip: true,
+  ratings: { select: { score: true } },
+  operator: { select: { id: true, displayName: true, operatorRatings: { select: { score: true } } } },
 };
 
 function formatTrip(trip: any) {
