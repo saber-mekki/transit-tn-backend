@@ -33,7 +33,6 @@ router.get('/', async (req: Request, res: Response) => {
       hasBus: op.trips.some(t => t.type === 'BUS'),
       hasTransporter: op.trips.some(t => t.type === 'TRANSPORTER'),
     }))
-    .filter(op => op.tripCount > 0)
     .sort((a, b) => parseFloat(b.avgRating || '0') - parseFloat(a.avgRating || '0'));
 
     return res.json(result);
