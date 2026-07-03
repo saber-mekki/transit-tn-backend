@@ -11,7 +11,7 @@ function generateTrackingNumber(): string {
 }
 
 router.post('/', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
-  const { senderName, senderPhone, receiverName, receiverPhone, description, fromCity, toCity, price, weight, notes } = req.body;
+  const { senderName, senderPhone, receiverName, receiverPhone, description, fromCity, toCity, price, weight, notes, tripId } = req.body;
   if (!senderName || !senderPhone || !receiverName || !receiverPhone || !description || !fromCity || !toCity)
     return res.status(400).json({ message: 'Missing required fields' });
   try {
@@ -23,6 +23,7 @@ router.post('/', authenticate, requireOperator, async (req: AuthRequest, res: Re
       data: {
         trackingNumber,
         operatorId: req.user!.id,
+        tripId: tripId || null,
         senderName, senderPhone,
         receiverName, receiverPhone,
         description, fromCity, toCity,
@@ -30,7 +31,8 @@ router.post('/', authenticate, requireOperator, async (req: AuthRequest, res: Re
         weight: weight ? parseFloat(weight) : null,
         notes: notes || null,
         status: 'RECEIVED',
-      }
+      },
+      include: { trip: { select: { id: true, fromCity: true, toCity: true, departureTime: true } } }
     });
     return res.status(201).json(shipment);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }

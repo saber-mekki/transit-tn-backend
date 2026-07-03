@@ -280,6 +280,11 @@ router.put('/:id/complete', authenticate, async (req: AuthRequest, res: Response
       where: { id: req.params.id },
       data: { status: 'COMPLETED', completedAt: new Date() }
     });
+    // Auto-update linked shipments to IN_TRANSIT
+    await prisma.shipment.updateMany({
+      where: { tripId: req.params.id, status: 'RECEIVED' },
+      data: { status: 'IN_TRANSIT' }
+    });
     return res.json(updated);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
