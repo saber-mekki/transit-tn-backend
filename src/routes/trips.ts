@@ -292,15 +292,6 @@ router.put('/:id/complete', authenticate, async (req: AuthRequest, res: Response
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
 
-    return res.json(trips.map(t => ({
-      ...formatTrip(t),
-      operatorInfo: t.operator,
-      avgRating: t.ratings.length ? (t.ratings.reduce((a: number, r: any) => a + r.score, 0) / t.ratings.length).toFixed(1) : null,
-      ratingCount: t.ratings.length
-    })));
-  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
-});
-
 // ─── POST /api/trips/:id/rate ─────────────────────
 router.post('/:id/rate', authenticate, async (req: AuthRequest, res: Response) => {
   const { score, comment } = req.body;

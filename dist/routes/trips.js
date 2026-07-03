@@ -329,17 +329,6 @@ exports.router.put('/:id/complete', auth_1.authenticate, async (req, res) => {
         return res.status(500).json({ message: 'Server error' });
     }
 });
-return res.json(trips.map(t => ({
-    ...formatTrip(t),
-    operatorInfo: t.operator,
-    avgRating: t.ratings.length ? (t.ratings.reduce((a, r) => a + r.score, 0) / t.ratings.length).toFixed(1) : null,
-    ratingCount: t.ratings.length
-})));
-try { }
-catch (e) {
-    return res.status(500).json({ message: 'Server error' });
-}
-;
 // ─── POST /api/trips/:id/rate ─────────────────────
 exports.router.post('/:id/rate', auth_1.authenticate, async (req, res) => {
     const { score, comment } = req.body;
