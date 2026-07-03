@@ -113,6 +113,9 @@ router.get('/history', authenticate, async (req: AuthRequest, res: Response) => 
       orderBy: { completedAt: 'desc' },
       take: 100
     });
+    return res.json(trips);
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
 
 router.get('/:id', async (req: Request, res: Response) => {
   try {

@@ -125,215 +125,221 @@ exports.router.get('/history', auth_1.authenticate, async (req, res) => {
             orderBy: { completedAt: 'desc' },
             take: 100
         });
-        exports.router.get('/:id', async (req, res) => {
-            try {
-                const trip = await db_1.default.trip.findUnique({ where: { id: req.params.id }, include: INCLUDE_ALL });
-                if (!trip)
-                    return res.status(404).json({ message: 'Trip not found' });
-                return res.json(formatTrip(trip));
-            }
-            catch (error) {
-                return res.status(500).json({ message: 'Error fetching trip' });
-            }
-        });
-        // ─── POST /api/trips ─────────────────────────────
-        exports.router.post('/', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
-            const { type, fromCity, toCity, departureTime, arrivalTime, ...details } = req.body;
-            if (!type || !fromCity || !toCity || !departureTime) {
-                return res.status(400).json({ message: 'type, fromCity, toCity, departureTime are required' });
-            }
-            try {
-                const operatorId = req.user.id;
-                const operator = await db_1.default.user.findUnique({ where: { id: operatorId } });
-                if (!operator)
-                    return res.status(404).json({ message: 'Operator not found' });
-                const tripType = type.toUpperCase();
-                const dt = new Date(departureTime);
-                const at = arrivalTime ? new Date(arrivalTime) : dt;
-                let newTrip;
-                if (tripType === client_1.TransportType.LOUAGE) {
-                    const { price, totalSeats, customStationName, vehicleNumber, contactInfo } = details;
-                    newTrip = await db_1.default.trip.create({
-                        data: {
-                            type: client_1.TransportType.LOUAGE, operatorId, operatorName: operator.displayName,
-                            fromCity, toCity, departureTime: dt, arrivalTime: at,
-                            louageTrip: { create: {
-                                    price: Number(price) || 0, totalSeats: Number(totalSeats) || 8,
-                                    availableSeats: Number(totalSeats) || 8, isFull: false,
-                                    customStationName: customStationName || null,
-                                    vehicleNumber: vehicleNumber || null,
-                                    contactInfo: contactInfo || null,
-                                } },
-                        }, include: INCLUDE_ALL,
-                    });
-                }
-                else if (tripType === client_1.TransportType.BUS) {
-                    const { price, totalSeats, customStationName } = details;
-                    newTrip = await db_1.default.trip.create({
-                        data: {
-                            type: client_1.TransportType.BUS, operatorId, operatorName: operator.displayName,
-                            fromCity, toCity, departureTime: dt, arrivalTime: at,
-                            busTrip: { create: {
-                                    price: Number(price) || 0, totalSeats: Number(totalSeats) || 8,
-                                    availableSeats: Number(totalSeats) || 8,
-                                    customDepartureStationName: customStationName || null,
-                                } },
-                        }, include: INCLUDE_ALL,
-                    });
-                }
-                else if (tripType === client_1.TransportType.TRANSPORTER) {
-                    const { contactInfo, vehicleType, availableSpace, eta, route } = details;
-                    newTrip = await db_1.default.trip.create({
-                        data: {
-                            type: client_1.TransportType.TRANSPORTER, operatorId, operatorName: operator.displayName,
-                            fromCity, toCity, departureTime: dt, arrivalTime: at,
-                            transporterTrip: { create: {
-                                    contactInfo: contactInfo || '', vehicleType: vehicleType || '',
-                                    availableSpace: availableSpace || '', eta: eta || '',
-                                    route: route || [],
-                                } },
-                        }, include: INCLUDE_ALL,
-                    });
-                }
-                else {
-                    return res.status(400).json({ message: 'Invalid trip type' });
-                }
-                return res.status(201).json(formatTrip(newTrip));
-            }
-            catch (error) {
-                console.error('POST trip error:', error.message);
-                return res.status(500).json({ message: error.message || 'Error creating trip' });
-            }
-        });
-        // ─── PUT /api/trips/:id ──────────────────────────
-        exports.router.put('/:id', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
-            const { id } = req.params;
-            try {
-                // IMPORTANT: include INCLUDE_ALL to get type-specific sub-tables
-                const trip = await db_1.default.trip.findUnique({ where: { id }, include: INCLUDE_ALL });
-                if (!trip)
-                    return res.status(404).json({ message: 'Trip not found' });
-                if (req.user.role !== 'ADMIN' && trip.operatorId !== req.user.id) {
-                    return res.status(403).json({ message: 'You can only edit your own trips' });
-                }
-                const { fromCity, toCity, departureTime, arrivalTime, availableSeats, isFull, price, totalSeats, customStationName, vehicleNumber, contactInfo, vehicleType, availableSpace, eta, } = req.body;
-                const baseUpdate = {};
-                if (fromCity)
-                    baseUpdate.fromCity = fromCity;
-                if (toCity)
-                    baseUpdate.toCity = toCity;
-                if (departureTime)
-                    baseUpdate.departureTime = new Date(departureTime);
-                if (arrivalTime)
-                    baseUpdate.arrivalTime = new Date(arrivalTime);
-                if (trip.type === 'LOUAGE') {
-                    const lu = {};
-                    if (price !== undefined)
-                        lu.price = Number(price);
-                    if (totalSeats !== undefined)
-                        lu.totalSeats = Number(totalSeats);
-                    if (availableSeats !== undefined)
-                        lu.availableSeats = Number(availableSeats);
-                    if (availableSeats !== undefined)
-                        lu.isFull = Number(availableSeats) === 0;
-                    if (isFull !== undefined && availableSeats === undefined)
-                        lu.isFull = Boolean(isFull);
-                    if (customStationName !== undefined)
-                        lu.customStationName = customStationName;
-                    if (vehicleNumber !== undefined)
-                        lu.vehicleNumber = vehicleNumber;
-                    if (contactInfo !== undefined)
-                        lu.contactInfo = contactInfo;
-                    if (Object.keys(lu).length > 0)
-                        baseUpdate.louageTrip = { update: lu };
-                }
-                else if (trip.type === 'BUS') {
-                    const bu = {};
-                    if (price !== undefined)
-                        bu.price = Number(price);
-                    if (totalSeats !== undefined)
-                        bu.totalSeats = Number(totalSeats);
-                    if (availableSeats !== undefined)
-                        bu.availableSeats = Number(availableSeats);
-                    if (customStationName !== undefined)
-                        bu.customDepartureStationName = customStationName;
-                    if (Object.keys(bu).length > 0)
-                        baseUpdate.busTrip = { update: bu };
-                }
-                else if (trip.type === 'TRANSPORTER') {
-                    const tu = {};
-                    if (contactInfo !== undefined)
-                        tu.contactInfo = contactInfo;
-                    if (vehicleType !== undefined)
-                        tu.vehicleType = vehicleType;
-                    if (availableSpace !== undefined)
-                        tu.availableSpace = availableSpace;
-                    if (eta !== undefined)
-                        tu.eta = eta;
-                    if (req.body.route !== undefined)
-                        tu.route = req.body.route;
-                    if (Object.keys(tu).length > 0)
-                        baseUpdate.transporterTrip = { update: tu };
-                }
-                const updated = await db_1.default.trip.update({ where: { id }, data: baseUpdate, include: INCLUDE_ALL });
-                return res.json(formatTrip(updated));
-            }
-            catch (error) {
-                console.error('PUT trip error:', error.message);
-                return res.status(500).json({ message: error.message || 'Error updating trip' });
-            }
-        });
-        // ─── DELETE /api/trips/:id ───────────────────────
-        exports.router.delete('/:id', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
-            const { id } = req.params;
-            try {
-                const trip = await db_1.default.trip.findUnique({ where: { id } });
-                if (!trip)
-                    return res.status(404).json({ message: 'Trip not found' });
-                if (req.user.role !== 'ADMIN' && trip.operatorId !== req.user.id) {
-                    return res.status(403).json({ message: 'You can only delete your own trips' });
-                }
-                await db_1.default.trip.delete({ where: { id } });
-                return res.status(204).send();
-            }
-            catch (error) {
-                return res.status(500).json({ message: error.message || 'Error deleting trip' });
-            }
-        });
-        // ─── PUT /api/trips/:id/complete ─────────────────
-        exports.router.put('/:id/complete', auth_1.authenticate, async (req, res) => {
-            try {
-                const trip = await db_1.default.trip.findUnique({ where: { id: req.params.id } });
-                if (!trip)
-                    return res.status(404).json({ message: 'Trip not found' });
-                if (req.user?.role !== 'ADMIN' && trip.operatorId !== req.user?.id)
-                    return res.status(403).json({ message: 'Forbidden' });
-                const updated = await db_1.default.trip.update({
-                    where: { id: req.params.id },
-                    data: { status: 'COMPLETED', completedAt: new Date() }
-                });
-                // Auto-update linked shipments to IN_TRANSIT
-                await db_1.default.shipment.updateMany({
-                    where: { tripId: req.params.id, status: 'RECEIVED' },
-                    data: { status: 'IN_TRANSIT' }
-                });
-                return res.json(updated);
-            }
-            catch (e) {
-                return res.status(500).json({ message: 'Server error' });
-            }
-        });
-        return res.json(trips.map(t => ({
-            ...formatTrip(t),
-            operatorInfo: t.operator,
-            avgRating: t.ratings.length ? (t.ratings.reduce((a, r) => a + r.score, 0) / t.ratings.length).toFixed(1) : null,
-            ratingCount: t.ratings.length
-        })));
+        return res.json(trips);
     }
     catch (e) {
         return res.status(500).json({ message: 'Server error' });
     }
 });
+exports.router.get('/:id', async (req, res) => {
+    try {
+        const trip = await db_1.default.trip.findUnique({ where: { id: req.params.id }, include: INCLUDE_ALL });
+        if (!trip)
+            return res.status(404).json({ message: 'Trip not found' });
+        return res.json(formatTrip(trip));
+    }
+    catch (error) {
+        return res.status(500).json({ message: 'Error fetching trip' });
+    }
+});
+// ─── POST /api/trips ─────────────────────────────
+exports.router.post('/', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
+    const { type, fromCity, toCity, departureTime, arrivalTime, ...details } = req.body;
+    if (!type || !fromCity || !toCity || !departureTime) {
+        return res.status(400).json({ message: 'type, fromCity, toCity, departureTime are required' });
+    }
+    try {
+        const operatorId = req.user.id;
+        const operator = await db_1.default.user.findUnique({ where: { id: operatorId } });
+        if (!operator)
+            return res.status(404).json({ message: 'Operator not found' });
+        const tripType = type.toUpperCase();
+        const dt = new Date(departureTime);
+        const at = arrivalTime ? new Date(arrivalTime) : dt;
+        let newTrip;
+        if (tripType === client_1.TransportType.LOUAGE) {
+            const { price, totalSeats, customStationName, vehicleNumber, contactInfo } = details;
+            newTrip = await db_1.default.trip.create({
+                data: {
+                    type: client_1.TransportType.LOUAGE, operatorId, operatorName: operator.displayName,
+                    fromCity, toCity, departureTime: dt, arrivalTime: at,
+                    louageTrip: { create: {
+                            price: Number(price) || 0, totalSeats: Number(totalSeats) || 8,
+                            availableSeats: Number(totalSeats) || 8, isFull: false,
+                            customStationName: customStationName || null,
+                            vehicleNumber: vehicleNumber || null,
+                            contactInfo: contactInfo || null,
+                        } },
+                }, include: INCLUDE_ALL,
+            });
+        }
+        else if (tripType === client_1.TransportType.BUS) {
+            const { price, totalSeats, customStationName } = details;
+            newTrip = await db_1.default.trip.create({
+                data: {
+                    type: client_1.TransportType.BUS, operatorId, operatorName: operator.displayName,
+                    fromCity, toCity, departureTime: dt, arrivalTime: at,
+                    busTrip: { create: {
+                            price: Number(price) || 0, totalSeats: Number(totalSeats) || 8,
+                            availableSeats: Number(totalSeats) || 8,
+                            customDepartureStationName: customStationName || null,
+                        } },
+                }, include: INCLUDE_ALL,
+            });
+        }
+        else if (tripType === client_1.TransportType.TRANSPORTER) {
+            const { contactInfo, vehicleType, availableSpace, eta, route } = details;
+            newTrip = await db_1.default.trip.create({
+                data: {
+                    type: client_1.TransportType.TRANSPORTER, operatorId, operatorName: operator.displayName,
+                    fromCity, toCity, departureTime: dt, arrivalTime: at,
+                    transporterTrip: { create: {
+                            contactInfo: contactInfo || '', vehicleType: vehicleType || '',
+                            availableSpace: availableSpace || '', eta: eta || '',
+                            route: route || [],
+                        } },
+                }, include: INCLUDE_ALL,
+            });
+        }
+        else {
+            return res.status(400).json({ message: 'Invalid trip type' });
+        }
+        return res.status(201).json(formatTrip(newTrip));
+    }
+    catch (error) {
+        console.error('POST trip error:', error.message);
+        return res.status(500).json({ message: error.message || 'Error creating trip' });
+    }
+});
+// ─── PUT /api/trips/:id ──────────────────────────
+exports.router.put('/:id', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
+    const { id } = req.params;
+    try {
+        // IMPORTANT: include INCLUDE_ALL to get type-specific sub-tables
+        const trip = await db_1.default.trip.findUnique({ where: { id }, include: INCLUDE_ALL });
+        if (!trip)
+            return res.status(404).json({ message: 'Trip not found' });
+        if (req.user.role !== 'ADMIN' && trip.operatorId !== req.user.id) {
+            return res.status(403).json({ message: 'You can only edit your own trips' });
+        }
+        const { fromCity, toCity, departureTime, arrivalTime, availableSeats, isFull, price, totalSeats, customStationName, vehicleNumber, contactInfo, vehicleType, availableSpace, eta, } = req.body;
+        const baseUpdate = {};
+        if (fromCity)
+            baseUpdate.fromCity = fromCity;
+        if (toCity)
+            baseUpdate.toCity = toCity;
+        if (departureTime)
+            baseUpdate.departureTime = new Date(departureTime);
+        if (arrivalTime)
+            baseUpdate.arrivalTime = new Date(arrivalTime);
+        if (trip.type === 'LOUAGE') {
+            const lu = {};
+            if (price !== undefined)
+                lu.price = Number(price);
+            if (totalSeats !== undefined)
+                lu.totalSeats = Number(totalSeats);
+            if (availableSeats !== undefined)
+                lu.availableSeats = Number(availableSeats);
+            if (availableSeats !== undefined)
+                lu.isFull = Number(availableSeats) === 0;
+            if (isFull !== undefined && availableSeats === undefined)
+                lu.isFull = Boolean(isFull);
+            if (customStationName !== undefined)
+                lu.customStationName = customStationName;
+            if (vehicleNumber !== undefined)
+                lu.vehicleNumber = vehicleNumber;
+            if (contactInfo !== undefined)
+                lu.contactInfo = contactInfo;
+            if (Object.keys(lu).length > 0)
+                baseUpdate.louageTrip = { update: lu };
+        }
+        else if (trip.type === 'BUS') {
+            const bu = {};
+            if (price !== undefined)
+                bu.price = Number(price);
+            if (totalSeats !== undefined)
+                bu.totalSeats = Number(totalSeats);
+            if (availableSeats !== undefined)
+                bu.availableSeats = Number(availableSeats);
+            if (customStationName !== undefined)
+                bu.customDepartureStationName = customStationName;
+            if (Object.keys(bu).length > 0)
+                baseUpdate.busTrip = { update: bu };
+        }
+        else if (trip.type === 'TRANSPORTER') {
+            const tu = {};
+            if (contactInfo !== undefined)
+                tu.contactInfo = contactInfo;
+            if (vehicleType !== undefined)
+                tu.vehicleType = vehicleType;
+            if (availableSpace !== undefined)
+                tu.availableSpace = availableSpace;
+            if (eta !== undefined)
+                tu.eta = eta;
+            if (req.body.route !== undefined)
+                tu.route = req.body.route;
+            if (Object.keys(tu).length > 0)
+                baseUpdate.transporterTrip = { update: tu };
+        }
+        const updated = await db_1.default.trip.update({ where: { id }, data: baseUpdate, include: INCLUDE_ALL });
+        return res.json(formatTrip(updated));
+    }
+    catch (error) {
+        console.error('PUT trip error:', error.message);
+        return res.status(500).json({ message: error.message || 'Error updating trip' });
+    }
+});
+// ─── DELETE /api/trips/:id ───────────────────────
+exports.router.delete('/:id', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const trip = await db_1.default.trip.findUnique({ where: { id } });
+        if (!trip)
+            return res.status(404).json({ message: 'Trip not found' });
+        if (req.user.role !== 'ADMIN' && trip.operatorId !== req.user.id) {
+            return res.status(403).json({ message: 'You can only delete your own trips' });
+        }
+        await db_1.default.trip.delete({ where: { id } });
+        return res.status(204).send();
+    }
+    catch (error) {
+        return res.status(500).json({ message: error.message || 'Error deleting trip' });
+    }
+});
+// ─── PUT /api/trips/:id/complete ─────────────────
+exports.router.put('/:id/complete', auth_1.authenticate, async (req, res) => {
+    try {
+        const trip = await db_1.default.trip.findUnique({ where: { id: req.params.id } });
+        if (!trip)
+            return res.status(404).json({ message: 'Trip not found' });
+        if (req.user?.role !== 'ADMIN' && trip.operatorId !== req.user?.id)
+            return res.status(403).json({ message: 'Forbidden' });
+        const updated = await db_1.default.trip.update({
+            where: { id: req.params.id },
+            data: { status: 'COMPLETED', completedAt: new Date() }
+        });
+        // Auto-update linked shipments to IN_TRANSIT
+        await db_1.default.shipment.updateMany({
+            where: { tripId: req.params.id, status: 'RECEIVED' },
+            data: { status: 'IN_TRANSIT' }
+        });
+        return res.json(updated);
+    }
+    catch (e) {
+        return res.status(500).json({ message: 'Server error' });
+    }
+});
+return res.json(trips.map(t => ({
+    ...formatTrip(t),
+    operatorInfo: t.operator,
+    avgRating: t.ratings.length ? (t.ratings.reduce((a, r) => a + r.score, 0) / t.ratings.length).toFixed(1) : null,
+    ratingCount: t.ratings.length
+})));
+try { }
+catch (e) {
+    return res.status(500).json({ message: 'Server error' });
+}
+;
 // ─── POST /api/trips/:id/rate ─────────────────────
 exports.router.post('/:id/rate', auth_1.authenticate, async (req, res) => {
     const { score, comment } = req.body;
