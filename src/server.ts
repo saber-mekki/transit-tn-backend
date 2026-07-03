@@ -17,6 +17,7 @@ import { router as operatorRatingRoutes }   from './routes/operatorRatings';
 import { router as reservationRoutes }      from './routes/reservations';
 import { router as statsRoutes }            from './routes/stats';
 import { router as contactRoutes }          from './routes/contact';
+import { router as shipmentRoutes }         from './routes/shipments';
 
 dotenv.config();
 
@@ -65,6 +66,7 @@ app.use('/api/reservations',   reservationRoutes);
 app.use('/api/stats',          statsRoutes);
 app.use('/api/contact',        contactRoutes);
 app.use('/api/users',         userRoutes);
+app.use('/api/shipments',     shipmentRoutes);
 app.use('/api/trips',         tripRoutes);
 app.use('/api/stations',      stationRoutes);
 app.use('/api/locations',     locationRoutes);

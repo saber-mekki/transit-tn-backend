@@ -42,6 +42,7 @@ model User {
   updatedAt   DateTime  @updatedAt
   operatorRatings OperatorRating[] @relation("OperatorRatings")
   givenRatings    OperatorRating[] @relation("UserRatings")
+  shipments       Shipment[]       @relation("OperatorShipments")
   trips       Trip[]
   notifications Notification[]
 }
@@ -184,4 +185,24 @@ model Reservation {
   status      String   @default("PENDING")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model Shipment {
+  id              String   @id @default(cuid())
+  trackingNumber  String   @unique
+  operator        User     @relation("OperatorShipments", fields: [operatorId], references: [id], onDelete: Cascade)
+  operatorId      String
+  senderName      String
+  senderPhone     String
+  receiverName    String
+  receiverPhone   String
+  description     String
+  fromCity        String
+  toCity          String
+  price           Float?
+  weight          Float?
+  status          String   @default("RECEIVED")
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
