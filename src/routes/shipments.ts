@@ -54,6 +54,9 @@ router.get('/', authenticate, requireOperator, async (req: AuthRequest, res: Res
     const shipments = await prisma.shipment.findMany({
       where: { operatorId: req.user!.id },
       orderBy: { createdAt: 'desc' },
+      include: {
+        trip: { select: { id: true, fromCity: true, toCity: true, departureTime: true, type: true } }
+      }
     });
     return res.json(shipments);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }

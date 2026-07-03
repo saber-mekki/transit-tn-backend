@@ -62,6 +62,9 @@ exports.router.get('/', auth_1.authenticate, auth_1.requireOperator, async (req,
         const shipments = await db_1.default.shipment.findMany({
             where: { operatorId: req.user.id },
             orderBy: { createdAt: 'desc' },
+            include: {
+                trip: { select: { id: true, fromCity: true, toCity: true, departureTime: true, type: true } }
+            }
         });
         return res.json(shipments);
     }
