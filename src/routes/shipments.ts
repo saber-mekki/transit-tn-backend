@@ -79,6 +79,15 @@ router.put('/:id/status', authenticate, requireOperator, async (req: AuthRequest
     return res.json(updated);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
+router.delete('/bulk', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await prisma.shipment.deleteMany({
+      where: { operatorId: req.user!.id, status: { in: ['DELIVERED', 'CANCELLED'] } }
+    });
+    return res.json({ deleted: result.count });
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
+
 
 router.delete('/:id', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
   try {

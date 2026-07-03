@@ -93,6 +93,17 @@ exports.router.put('/:id/status', auth_1.authenticate, auth_1.requireOperator, a
         return res.status(500).json({ message: 'Server error' });
     }
 });
+exports.router.delete('/bulk', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
+    try {
+        const result = await db_1.default.shipment.deleteMany({
+            where: { operatorId: req.user.id, status: { in: ['DELIVERED', 'CANCELLED'] } }
+        });
+        return res.json({ deleted: result.count });
+    }
+    catch (e) {
+        return res.status(500).json({ message: 'Server error' });
+    }
+});
 exports.router.delete('/:id', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
     try {
         const shipment = await db_1.default.shipment.findUnique({ where: { id: req.params.id } });
