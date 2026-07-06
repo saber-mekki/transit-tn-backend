@@ -85,14 +85,17 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const sortByVal = (sortBy as string) || 'time';
     const orderByClause: any = sortByVal === 'time' ? { departureTime: 'asc' } : { createdAt: 'asc' };
-    const trips = await prisma.trip.findMany({ where, include: INCLUDE_ALL, orderBy: orderByClause });
+    const [trips, total] = await Promise.all([
+      prisma.trip.findMany({ where, include: INCLUDE_ALL, orderBy: orderByClause, take, skip }),
+      prisma.trip.count({ where })
+    ]);
     let formatted = trips.map(formatTrip);
     if (minPrice) formatted = formatted.filter((t: any) => !t.price || t.price >= parseFloat(minPrice as string));
     if (maxPrice) formatted = formatted.filter((t: any) => !t.price || t.price <= parseFloat(maxPrice as string));
     if (minSeats) formatted = formatted.filter((t: any) => t.availableSeats == null || t.availableSeats >= parseInt(minSeats as string));
     if (sortByVal === 'price') formatted.sort((a: any, b: any) => (a.price || 0) - (b.price || 0));
     if (sortByVal === 'seats') formatted.sort((a: any, b: any) => (b.availableSeats || 0) - (a.availableSeats || 0));
-    return res.json(formatted);
+    return res.json({ trips: formatted, total, hasMore: skip + take < total });
   } catch (error) {
     return res.status(500).json({ message: 'Error fetching trips' });
   }

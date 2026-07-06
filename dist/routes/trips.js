@@ -92,7 +92,10 @@ exports.router.get('/', async (req, res) => {
     try {
         const sortByVal = sortBy || 'time';
         const orderByClause = sortByVal === 'time' ? { departureTime: 'asc' } : { createdAt: 'asc' };
-        const trips = await db_1.default.trip.findMany({ where, include: INCLUDE_ALL, orderBy: orderByClause });
+        const [trips, total] = await Promise.all([
+            db_1.default.trip.findMany({ where, include: INCLUDE_ALL, orderBy: orderByClause, take, skip }),
+            db_1.default.trip.count({ where })
+        ]);
         let formatted = trips.map(formatTrip);
         if (minPrice)
             formatted = formatted.filter((t) => !t.price || t.price >= parseFloat(minPrice));
@@ -104,7 +107,7 @@ exports.router.get('/', async (req, res) => {
             formatted.sort((a, b) => (a.price || 0) - (b.price || 0));
         if (sortByVal === 'seats')
             formatted.sort((a, b) => (b.availableSeats || 0) - (a.availableSeats || 0));
-        return res.json(formatted);
+        return res.json({ trips: formatted, total, hasMore: skip + take < total });
     }
     catch (error) {
         return res.status(500).json({ message: 'Error fetching trips' });
