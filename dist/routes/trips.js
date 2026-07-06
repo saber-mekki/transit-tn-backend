@@ -372,3 +372,4 @@ exports.router.get('/:id/ratings', async (req, res) => {
         return res.status(500).json({ message: 'Server error' });
     }
 });
+// pagination fix lun. 06 juil. 2026 19:59:47 CEST
