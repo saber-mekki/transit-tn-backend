@@ -33,7 +33,9 @@ function formatTrip(trip) {
 }
 // ─── GET /api/trips ──────────────────────────────
 exports.router.get('/', async (req, res) => {
-    const { type, fromCity, toCity, operatorId, minPrice, maxPrice, minSeats, date, sortBy } = req.query;
+    const { type, fromCity, toCity, operatorId, minPrice, maxPrice, minSeats, date, sortBy, limit, offset } = req.query;
+    const take = parseInt(limit) || 20;
+    const skip = parseInt(offset) || 0;
     const where = { status: { not: 'COMPLETED' } };
     if (type)
         where.type = type.toUpperCase();

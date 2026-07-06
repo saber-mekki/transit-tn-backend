@@ -27,7 +27,9 @@ function formatTrip(trip: any) {
 
 // ─── GET /api/trips ──────────────────────────────
 router.get('/', async (req: Request, res: Response) => {
-  const { type, fromCity, toCity, operatorId, minPrice, maxPrice, minSeats, date, sortBy } = req.query;
+  const { type, fromCity, toCity, operatorId, minPrice, maxPrice, minSeats, date, sortBy, limit, offset } = req.query;
+  const take = parseInt(limit as string) || 20;
+  const skip = parseInt(offset as string) || 0;
   const where: any = { status: { not: 'COMPLETED' } };
   if (type) where.type = (type as string).toUpperCase() as TransportType;
   if (operatorId) where.operatorId = operatorId as string;
