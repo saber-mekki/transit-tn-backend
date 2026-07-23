@@ -43,6 +43,7 @@ model User {
   operatorRatings OperatorRating[] @relation("OperatorRatings")
   givenRatings    OperatorRating[] @relation("UserRatings")
   shipments       Shipment[]       @relation("OperatorShipments")
+  expenses        Expense[]        @relation("OperatorExpenses")
   trips       Trip[]
   notifications Notification[]
 }
@@ -76,6 +77,7 @@ model Trip {
   ratings         Rating[]
   shipments       Shipment[]
   reservations    Reservation[]
+  expenses        Expense[]
   louageTrip      LouageTrip?
   busTrip         BusTrip?
   transporterTrip TransporterTrip?
@@ -186,6 +188,17 @@ model Reservation {
   status      String   @default("PENDING")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model Expense {
+  id         String   @id @default(cuid())
+  operator   User     @relation("OperatorExpenses", fields: [operatorId], references: [id], onDelete: Cascade)
+  operatorId String
+  trip       Trip?    @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  tripId     String?
+  label      String
+  amount     Float
+  createdAt  DateTime @default(now())
 }
 
 model Shipment {
