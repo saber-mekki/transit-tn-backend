@@ -197,6 +197,7 @@ model Expense {
   trip       Trip?    @relation(fields: [tripId], references: [id], onDelete: SetNull)
   tripId     String?
   label      String
+  category   String   @default("OTHER")
   amount     Float
   createdAt  DateTime @default(now())
 }

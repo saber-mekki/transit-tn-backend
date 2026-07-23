@@ -15,13 +15,14 @@ router.get('/', authenticate, requireOperator, async (req: AuthRequest, res: Res
 });
 
 router.post('/', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
-  const { label, amount, tripId } = req.body;
+  const { label, amount, tripId, category } = req.body;
   if (!label || amount == null) return res.status(400).json({ message: 'Missing label or amount' });
   try {
     const expense = await prisma.expense.create({
       data: {
         operatorId: req.user!.id,
         label,
+        category: category || 'OTHER',
         amount: parseFloat(amount),
         tripId: tripId || null,
       },
