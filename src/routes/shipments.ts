@@ -62,6 +62,12 @@ router.get('/', authenticate, requireOperator, async (req: AuthRequest, res: Res
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
 
+router.put('/bulk-status', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
+  const { tripId, status } = req.body;
+  const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
+  if (!status || !validStatuses.includes(status))
+    return res.status(400).json({ message: 'Invalid status' });
+
 router.put('/:id', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
   const { senderName, senderPhone, receiverName, receiverPhone, description, fromCity, toCity, price, weight, notes, tripId } = req.body;
   try {
@@ -107,11 +113,7 @@ router.put('/:id/status', authenticate, requireOperator, async (req: AuthRequest
     return res.json(updated);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
-router.put('/bulk-status', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
-  const { tripId, status } = req.body;
-  const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
-  if (!status || !validStatuses.includes(status))
-    return res.status(400).json({ message: 'Invalid status' });
+
   try {
     const where: any = { operatorId: req.user!.id };
     if (tripId === 'no_trip') {
