@@ -107,6 +107,20 @@ router.put('/:id/status', authenticate, requireOperator, async (req: AuthRequest
     return res.json(updated);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
+router.put('/bulk-status', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
+  const { tripId, status } = req.body;
+  const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
+  if (!tripId || !validStatuses.includes(status))
+    return res.status(400).json({ message: 'Missing tripId or invalid status' });
+  try {
+    const result = await prisma.shipment.updateMany({
+      where: { tripId, operatorId: req.user!.id },
+      data: { status }
+    });
+    return res.json({ updated: result.count });
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
+
 router.delete('/bulk', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
   try {
     const result = await prisma.shipment.deleteMany({
