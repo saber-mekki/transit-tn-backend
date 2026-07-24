@@ -101,6 +101,19 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// ─── GET /api/trips/:id/report ───────────────────
+router.get('/:id/report', authenticate, async (req: any, res: Response) => {
+  try {
+    const trip = await prisma.trip.findUnique({ where: { id: req.params.id }, include: INCLUDE_ALL });
+    if (!trip) return res.status(404).json({ message: 'Trip not found' });
+    const shipments = await prisma.shipment.findMany({ where: { tripId: req.params.id } });
+    const expenses = await prisma.expense.findMany({ where: { tripId: req.params.id } });
+    const revenue = shipments.filter((s: any) => s.status === 'DELIVERED').reduce((sum: number, s: any) => sum + (s.price || 0), 0);
+    const expenseTotal = expenses.reduce((sum: number, e: any) => sum + e.amount, 0);
+    return res.json({ trip: formatTrip(trip), shipments, expenses, revenue, expenseTotal, profit: revenue - expenseTotal });
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
+
 // ─── GET /api/trips/:id ──────────────────────────
 // ─── GET /api/trips/history ───────────────────────
 router.get('/history', authenticate, async (req: AuthRequest, res: Response) => {
