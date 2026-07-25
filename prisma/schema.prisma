@@ -74,6 +74,8 @@ model Trip {
   updatedAt       DateTime         @updatedAt
   status          TripStatus       @default(ACTIVE)
   completedAt     DateTime?
+  collectionPoints Json?
+  deliveryPoints   Json?
   ratings         Rating[]
   shipments       Shipment[]
   reservations    Reservation[]
