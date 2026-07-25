@@ -199,6 +199,8 @@ router.post('/', authenticate, requireOperator, async (req: AuthRequest, res: Re
             availableSpace: availableSpace || '', eta: eta || '',
             route: route || [],
           }},
+          collectionPoints: details.collectionPoints || undefined,
+          deliveryPoints: details.deliveryPoints || undefined,
         }, include: INCLUDE_ALL,
       });
     } else {
@@ -265,6 +267,9 @@ router.put('/:id', authenticate, requireOperator, async (req: AuthRequest, res: 
       if (req.body.route !== undefined) tu.route = req.body.route;
       if (Object.keys(tu).length > 0) baseUpdate.transporterTrip = { update: tu };
     }
+
+    if (req.body.collectionPoints !== undefined) baseUpdate.collectionPoints = req.body.collectionPoints;
+    if (req.body.deliveryPoints !== undefined) baseUpdate.deliveryPoints = req.body.deliveryPoints;
 
     const updated = await prisma.trip.update({ where: { id }, data: baseUpdate, include: INCLUDE_ALL });
     return res.json(formatTrip(updated));
