@@ -10,14 +10,39 @@ const client_1 = require("@prisma/client");
 const db_1 = __importDefault(require("../db"));
 const auth_1 = require("../middleware/auth");
 exports.router = (0, express_1.Router)();
+// Admin: set user plan
+exports.router.put('/set-plan', auth_1.authenticate, auth_1.requireAdmin, async (req, res) => {
+    const { userId, plan, months } = req.body;
+    if (!userId || !plan)
+        return res.status(400).json({ message: 'userId and plan required' });
+    const validPlans = ['FREE', 'PRO', 'BUSINESS'];
+    if (!validPlans.includes(plan))
+        return res.status(400).json({ message: 'Invalid plan' });
+    try {
+        const planExpiresAt = plan === 'FREE' ? null : new Date(Date.now() + (months || 1) * 30 * 24 * 3600 * 1000);
+        const updated = await db_1.default.user.update({
+            where: { id: userId },
+            data: { plan, planExpiresAt },
+        });
+        return res.json({ id: updated.id, plan: updated.plan, planExpiresAt: updated.planExpiresAt });
+    }
+    catch (e) {
+        return res.status(500).json({ message: 'Server error' });
+    }
+});
 // All user routes require auth
 exports.router.use(auth_1.authenticate);
 // ─── GET /api/users ──────────────────────────────
 // Admin only: list all users
 exports.router.get('/', auth_1.requireAdmin, async (req, res) => {
     try {
+        const { role } = req.query;
+        const where = {};
+        if (role)
+            where.role = String(role).toUpperCase();
         const users = await db_1.default.user.findMany({
-            select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, createdAt: true },
+            where,
+            select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, createdAt: true, plan: true, planExpiresAt: true },
             orderBy: { createdAt: 'desc' },
         });
         return res.json(users);

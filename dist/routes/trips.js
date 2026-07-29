@@ -113,6 +113,22 @@ exports.router.get('/', async (req, res) => {
         return res.status(500).json({ message: 'Error fetching trips' });
     }
 });
+// ─── GET /api/trips/:id/report ───────────────────
+exports.router.get('/:id/report', auth_1.authenticate, async (req, res) => {
+    try {
+        const trip = await db_1.default.trip.findUnique({ where: { id: req.params.id }, include: INCLUDE_ALL });
+        if (!trip)
+            return res.status(404).json({ message: 'Trip not found' });
+        const shipments = await db_1.default.shipment.findMany({ where: { tripId: req.params.id } });
+        const expenses = await db_1.default.expense.findMany({ where: { tripId: req.params.id } });
+        const revenue = shipments.filter((s) => s.status === 'DELIVERED').reduce((sum, s) => sum + (s.price || 0), 0);
+        const expenseTotal = expenses.reduce((sum, e) => sum + e.amount, 0);
+        return res.json({ trip: formatTrip(trip), shipments, expenses, revenue, expenseTotal, profit: revenue - expenseTotal });
+    }
+    catch (e) {
+        return res.status(500).json({ message: 'Server error' });
+    }
+});
 // ─── GET /api/trips/:id ──────────────────────────
 // ─── GET /api/trips/history ───────────────────────
 exports.router.get('/history', auth_1.authenticate, async (req, res) => {
@@ -203,6 +219,8 @@ exports.router.post('/', auth_1.authenticate, auth_1.requireOperator, async (req
                             availableSpace: availableSpace || '', eta: eta || '',
                             route: route || [],
                         } },
+                    collectionPoints: details.collectionPoints || undefined,
+                    deliveryPoints: details.deliveryPoints || undefined,
                 }, include: INCLUDE_ALL,
             });
         }
@@ -286,6 +304,10 @@ exports.router.put('/:id', auth_1.authenticate, auth_1.requireOperator, async (r
             if (Object.keys(tu).length > 0)
                 baseUpdate.transporterTrip = { update: tu };
         }
+        if (req.body.collectionPoints !== undefined)
+            baseUpdate.collectionPoints = req.body.collectionPoints;
+        if (req.body.deliveryPoints !== undefined)
+            baseUpdate.deliveryPoints = req.body.deliveryPoints;
         const updated = await db_1.default.trip.update({ where: { id }, data: baseUpdate, include: INCLUDE_ALL });
         return res.json(formatTrip(updated));
     }

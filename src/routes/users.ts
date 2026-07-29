@@ -30,8 +30,12 @@ router.use(authenticate);
 // Admin only: list all users
 router.get('/', requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
+    const { role } = req.query;
+    const where: any = {};
+    if (role) where.role = String(role).toUpperCase();
     const users = await prisma.user.findMany({
-      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, createdAt: true },
+      where,
+      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, createdAt: true, plan: true, planExpiresAt: true },
       orderBy: { createdAt: 'desc' },
     });
     return res.json(users);

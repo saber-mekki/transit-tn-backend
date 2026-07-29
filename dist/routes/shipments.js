@@ -72,22 +72,76 @@ exports.router.get('/', auth_1.authenticate, auth_1.requireOperator, async (req,
         return res.status(500).json({ message: 'Server error' });
     }
 });
-exports.router.put('/:id/status', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
-    const { status } = req.body;
+exports.router.put('/bulk-status', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
+    const { tripId, status } = req.body;
     const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
-    if (!validStatuses.includes(status))
+    if (!status || !validStatuses.includes(status))
         return res.status(400).json({ message: 'Invalid status' });
-    try {
-        const shipment = await db_1.default.shipment.findUnique({ where: { id: req.params.id } });
-        if (!shipment)
-            return res.status(404).json({ message: 'Shipment not found' });
-        if (shipment.operatorId !== req.user.id)
-            return res.status(403).json({ message: 'Forbidden' });
-        const updated = await db_1.default.shipment.update({
-            where: { id: req.params.id },
-            data: { status }
+    exports.router.put('/:id/status', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
+        const { status } = req.body;
+        const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
+        if (!validStatuses.includes(status))
+            return res.status(400).json({ message: 'Invalid status' });
+        exports.router.put('/:id', auth_1.authenticate, auth_1.requireOperator, async (req, res) => {
+            const { senderName, senderPhone, receiverName, receiverPhone, description, fromCity, toCity, price, weight, notes, tripId } = req.body;
+            try {
+                const shipment = await db_1.default.shipment.findUnique({ where: { id: req.params.id } });
+                if (!shipment)
+                    return res.status(404).json({ message: 'Shipment not found' });
+                if (shipment.operatorId !== req.user.id)
+                    return res.status(403).json({ message: 'Forbidden' });
+                const updated = await db_1.default.shipment.update({
+                    where: { id: req.params.id },
+                    data: {
+                        senderName: senderName ?? shipment.senderName,
+                        senderPhone: senderPhone ?? shipment.senderPhone,
+                        receiverName: receiverName ?? shipment.receiverName,
+                        receiverPhone: receiverPhone ?? shipment.receiverPhone,
+                        description: description ?? shipment.description,
+                        fromCity: fromCity ?? shipment.fromCity,
+                        toCity: toCity ?? shipment.toCity,
+                        price: price !== undefined ? (price ? parseFloat(price) : null) : shipment.price,
+                        weight: weight !== undefined ? (weight ? parseFloat(weight) : null) : shipment.weight,
+                        notes: notes !== undefined ? notes : shipment.notes,
+                        tripId: tripId !== undefined ? (tripId || null) : shipment.tripId,
+                    },
+                    include: { trip: { select: { id: true, fromCity: true, toCity: true, departureTime: true } } }
+                });
+                return res.json(updated);
+            }
+            catch (e) {
+                return res.status(500).json({ message: 'Server error' });
+            }
         });
-        return res.json(updated);
+        try {
+            const shipment = await db_1.default.shipment.findUnique({ where: { id: req.params.id } });
+            if (!shipment)
+                return res.status(404).json({ message: 'Shipment not found' });
+            if (shipment.operatorId !== req.user.id)
+                return res.status(403).json({ message: 'Forbidden' });
+            const updated = await db_1.default.shipment.update({
+                where: { id: req.params.id },
+                data: { status }
+            });
+            return res.json(updated);
+        }
+        catch (e) {
+            return res.status(500).json({ message: 'Server error' });
+        }
+    });
+    try {
+        const where = { operatorId: req.user.id };
+        if (tripId === 'no_trip') {
+            where.tripId = null;
+        }
+        else if (tripId) {
+            where.tripId = tripId;
+        }
+        else {
+            return res.status(400).json({ message: 'Missing tripId' });
+        }
+        const result = await db_1.default.shipment.updateMany({ where, data: { status } });
+        return res.json({ updated: result.count });
     }
     catch (e) {
         return res.status(500).json({ message: 'Server error' });
