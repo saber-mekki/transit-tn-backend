@@ -37,7 +37,7 @@ router.post('/signup', async (req: Request, res: Response) => {
     const hashed = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
       data: { username, password: hashed, displayName, role: role.toUpperCase() as UserRole, email, phone: phone || null },
-      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true },
+      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true, plan: true, planExpiresAt: true },
     });
 
     // Notify all admins
@@ -187,7 +187,7 @@ router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user!.id },
-      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true },
+      select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true, plan: true, planExpiresAt: true },
     });
     if (!user) return res.status(404).json({ message: 'User not found' });
     return res.json(user);
