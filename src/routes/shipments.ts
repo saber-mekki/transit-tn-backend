@@ -68,6 +68,12 @@ router.put('/bulk-status', authenticate, requireOperator, async (req: AuthReques
   if (!status || !validStatuses.includes(status))
     return res.status(400).json({ message: 'Invalid status' });
 
+router.put('/:id/status', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
+  const { status } = req.body;
+  const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
+  if (!validStatuses.includes(status))
+    return res.status(400).json({ message: 'Invalid status' });
+
 router.put('/:id', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
   const { senderName, senderPhone, receiverName, receiverPhone, description, fromCity, toCity, price, weight, notes, tripId } = req.body;
   try {
@@ -96,11 +102,7 @@ router.put('/:id', authenticate, requireOperator, async (req: AuthRequest, res: 
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
 
-router.put('/:id/status', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
-  const { status } = req.body;
-  const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
-  if (!validStatuses.includes(status))
-    return res.status(400).json({ message: 'Invalid status' });
+
   try {
     const shipment = await prisma.shipment.findUnique({ where: { id: req.params.id } });
     if (!shipment) return res.status(404).json({ message: 'Shipment not found' });
