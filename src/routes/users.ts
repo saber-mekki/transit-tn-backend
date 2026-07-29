@@ -2,9 +2,26 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { UserRole } from '@prisma/client';
 import prisma from '../db';
+import { authenticate, requireAdmin } from '../middleware/auth';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
 
 export const router = Router();
+
+// Admin: set user plan
+router.put('/set-plan', authenticate, requireAdmin, async (req: any, res: any) => {
+  const { userId, plan, months } = req.body;
+  if (!userId || !plan) return res.status(400).json({ message: 'userId and plan required' });
+  const validPlans = ['FREE', 'PRO', 'BUSINESS'];
+  if (!validPlans.includes(plan)) return res.status(400).json({ message: 'Invalid plan' });
+  try {
+    const planExpiresAt = plan === 'FREE' ? null : new Date(Date.now() + (months || 1) * 30 * 24 * 3600 * 1000);
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { plan, planExpiresAt },
+    });
+    return res.json({ id: updated.id, plan: updated.plan, planExpiresAt: updated.planExpiresAt });
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
 
 // All user routes require auth
 router.use(authenticate);

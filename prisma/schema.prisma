@@ -38,6 +38,8 @@ model User {
   password    String
   displayName String
   role        UserRole  @default(USER)
+  plan        String    @default("FREE")
+  planExpiresAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   operatorRatings OperatorRating[] @relation("OperatorRatings")
