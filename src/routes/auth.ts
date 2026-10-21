@@ -173,10 +173,22 @@ router.put('/profile', authenticate, async (req: AuthRequest, res: Response) => 
     }
     const user = await prisma.user.update({
       where: { id: req.user!.id },
-      data: { displayName, email: email || null, phone: phone || null, bio: bio || null, pushToken: pushToken || null },
+      data: { displayName, email: email || null, phone: phone || null, bio: bio || null, pushToken: pushToken === undefined ? undefined : pushToken || null },
       select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true }
     });
     return res.json(user);
+  } catch (error) {
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ─── PUT /api/auth/push-token ────────────────────
+router.put('/push-token', authenticate, async (req: AuthRequest, res: Response) => {
+  const { pushToken } = req.body;
+  if (pushToken !== null && typeof pushToken !== 'string') return res.status(400).json({ message: 'pushToken must be a string or null' });
+  try {
+    await prisma.user.update({ where: { id: req.user!.id }, data: { pushToken } });
+    return res.json({ ok: true });
   } catch (error) {
     return res.status(500).json({ message: 'Server error' });
   }
