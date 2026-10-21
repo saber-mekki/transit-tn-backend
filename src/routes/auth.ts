@@ -97,12 +97,30 @@ router.post('/login', async (req: Request, res: Response) => {
 
 
 // ─── POST /api/auth/google ────────────────────────
+// Audience = the web client ID the app passes to GoogleSignin.configure
+const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || '124636272128-eg5v01of98ev5mfb85p8evikqoermofl.apps.googleusercontent.com')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+async function verifyGoogleIdToken(idToken: string) {
+  const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+  if (!r.ok) return null;
+  const info: any = await r.json();
+  const issOk = info.iss === 'accounts.google.com' || info.iss === 'https://accounts.google.com';
+  const verified = info.email_verified === true || info.email_verified === 'true';
+  if (!issOk || !GOOGLE_CLIENT_IDS.includes(info.aud) || !verified || !info.email) return null;
+  return { email: String(info.email).toLowerCase(), displayName: info.name as string | undefined };
+}
+
 router.post('/google', async (req: Request, res: Response) => {
-  const { email, displayName, googleId } = req.body;
-  if (!email) return res.status(400).json({ message: 'Email required' });
+  const { idToken } = req.body;
+  if (!idToken || typeof idToken !== 'string') return res.status(400).json({ message: 'idToken required' });
 
   try {
-    let user = await prisma.user.findFirst({ where: { email } });
+    const google = await verifyGoogleIdToken(idToken);
+    if (!google) return res.status(401).json({ message: 'Invalid Google token' });
+    const { email, displayName } = google;
+
+    let user = await prisma.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
     const isNewUser = !user;
     
     if (!user) {
