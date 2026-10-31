@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import { UserRole } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, generateToken, AuthRequest } from '../middleware/auth';
+import { randomInt } from 'crypto';
+import { sendEmail } from '../utils/sendEmail';
 
 export const router = Router();
 
@@ -141,20 +143,81 @@ router.post('/google', async (req: Request, res: Response) => {
 });
 
 
+// Reset codes live in EmailVerification under a "reset:" prefix so signup
+// verification codes (/api/verify) can never be used to reset a password.
+const RESET_CODE_TTL_MS = 15 * 60 * 1000;
+const MAX_RESET_ATTEMPTS = 5;
+const resetAttempts = new Map<string, number>();
+const resetKey = (email: string) => `reset:${email.trim().toLowerCase()}`;
+
+// ─── POST /api/auth/forgot-password ───────────────
+router.post('/forgot-password', async (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email required' });
+  // Same response whether or not the account exists, so emails can't be enumerated
+  const genericResponse = { message: 'If an account exists for this email, a reset code has been sent.' };
+  try {
+    const user = await prisma.user.findFirst({ where: { email: { equals: email.trim(), mode: 'insensitive' } } });
+    if (!user?.email) return res.json(genericResponse);
+
+    const key = resetKey(user.email);
+    const code = randomInt(100000, 1000000).toString();
+    await prisma.emailVerification.deleteMany({ where: { email: key } });
+    await prisma.emailVerification.create({ data: { email: key, code, expiresAt: new Date(Date.now() + RESET_CODE_TTL_MS) } });
+    resetAttempts.delete(key);
+
+    await sendEmail(
+      user.email,
+      'إعادة تعيين كلمة المرور - Transit TN',
+      `<div style="font-family:sans-serif;max-width:400px;margin:auto;padding:24px;background:#111827;border-radius:12px;">
+        <h2 style="color:#6366F1;">🚗 Transit TN</h2>
+        <p style="color:#F9FAFB;">رمز إعادة تعيين كلمة المرور / Code de réinitialisation :</p>
+        <h1 style="letter-spacing:12px;color:#6366F1;font-size:36px;">${code}</h1>
+        <p style="color:#9CA3AF;">صالح لمدة 15 دقيقة فقط. / Valable 15 minutes.</p>
+        <p style="color:#9CA3AF;">إذا لم تطلب ذلك، تجاهل هذه الرسالة. / Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.</p>
+      </div>`
+    );
+    return res.json(genericResponse);
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ─── POST /api/auth/reset-password ────────────────
 router.post('/reset-password', async (req: Request, res: Response) => {
-  const { email, newPassword } = req.body;
-  if (!email || !newPassword) {
-    return res.status(400).json({ message: 'Email and new password required' });
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ message: 'Email, code and new password required' });
   }
   if (newPassword.length < 8) {
     return res.status(400).json({ message: 'Password must be at least 8 characters' });
   }
+  const key = resetKey(email);
   try {
-    const user = await prisma.user.findFirst({ where: { OR: [{ email }, { username: email }] } });
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    const record = await prisma.emailVerification.findFirst({
+      where: { email: key, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!record || record.code !== String(code).trim()) {
+      const attempts = (resetAttempts.get(key) || 0) + 1;
+      if (attempts >= MAX_RESET_ATTEMPTS) {
+        // Too many wrong guesses: burn the code, user must request a new one
+        await prisma.emailVerification.deleteMany({ where: { email: key } });
+        resetAttempts.delete(key);
+      } else {
+        resetAttempts.set(key, attempts);
+      }
+      return res.status(400).json({ message: 'Invalid or expired code' });
+    }
+
+    const user = await prisma.user.findFirst({ where: { email: { equals: email.trim(), mode: 'insensitive' } } });
+    if (!user) return res.status(400).json({ message: 'Invalid or expired code' });
+
     const hashed = await bcrypt.hash(newPassword, 12);
     await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
+    await prisma.emailVerification.deleteMany({ where: { email: key } });
+    resetAttempts.delete(key);
     return res.json({ message: 'Password reset successfully' });
   } catch (error) {
     return res.status(500).json({ message: 'Server error' });
