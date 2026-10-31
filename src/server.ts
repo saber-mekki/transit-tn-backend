@@ -1,8 +1,9 @@
+// Must be first: loads .env before routes read process.env at import time
+import { config } from './config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import dotenv from 'dotenv';
 
 import { router as authRoutes }          from './routes/auth';
 import { router as userRoutes }          from './routes/users';
@@ -20,10 +21,9 @@ import { router as contactRoutes }          from './routes/contact';
 import { router as shipmentRoutes }         from './routes/shipments';
 import { router as expenseRoutes }          from './routes/expenses';
 
-dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = config.port;
 
 // ─── SECURITY MIDDLEWARE ─────────────────────────
 app.use(helmet());

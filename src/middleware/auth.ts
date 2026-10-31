@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { config } from '../config';
 
 export interface AuthRequest extends Request {
   user?: { id: string; role: string; username: string };
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'transit-tn-secret-change-in-production';
+const JWT_SECRET = config.jwtSecret;
 
 export const authenticate = (req: AuthRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;

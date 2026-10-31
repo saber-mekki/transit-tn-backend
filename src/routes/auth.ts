@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { UserRole } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, generateToken, AuthRequest } from '../middleware/auth';
@@ -239,21 +238,17 @@ router.delete('/account', authenticate, async (req: AuthRequest, res: Response) 
 });
 
 // ─── POST /api/auth/update-role ────────────────────────
-router.post('/update-role', async (req: Request, res: Response) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ message: 'Unauthorized' });
-  const token = authHeader.split(' ')[1];
+router.post('/update-role', authenticate, async (req: AuthRequest, res: Response) => {
+  const { role } = req.body;
+  if (!['USER', 'OPERATOR'].includes(role)) return res.status(400).json({ message: 'Invalid role' });
   try {
-    const decoded: any = require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'secret');
-    const { role } = req.body;
-    if (!['USER', 'OPERATOR'].includes(role)) return res.status(400).json({ message: 'Invalid role' });
     const user = await prisma.user.update({
-      where: { id: decoded.id },
+      where: { id: req.user!.id },
       data: { role },
     });
     const { password: _, ...safeUser } = user;
     return res.json({ user: safeUser });
   } catch (e) {
-    return res.status(401).json({ message: 'Invalid token' });
+    return res.status(500).json({ message: 'Server error' });
   }
 });
