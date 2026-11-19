@@ -103,7 +103,10 @@ exports.router.get('/live-map/stream', exports.trackingLimiter, (req, res) => {
         'X-Accel-Buffering': 'no',
     });
     res.write('retry: 5000\n\n');
-    (0, liveTracking_1.sendEvent)(res, 'snapshot', (0, liveTracking_1.liveSnapshot)());
+    const snapshot = (0, liveTracking_1.liveSnapshot)();
+    (0, liveTracking_1.sendEvent)(res, 'snapshot', snapshot);
+    // Same data as individual "location" events, for clients that only listen to those.
+    snapshot.forEach(loc => (0, liveTracking_1.sendEvent)(res, 'location', loc));
     (0, liveTracking_1.addMapStream)(res);
     const ping = setInterval(() => { try {
         res.write(': ping\n\n');
