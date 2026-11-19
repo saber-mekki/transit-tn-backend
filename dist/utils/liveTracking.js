@@ -7,7 +7,9 @@ exports.MAX_MAP_STREAMS = exports.MAX_STREAMS_PER_TRIP = void 0;
 exports.startTripManually = startTripManually;
 exports.endTripManually = endTripManually;
 exports.tripWindow = tripWindow;
+exports.deriveStatus = deriveStatus;
 exports.getTrackingStatus = getTrackingStatus;
+exports.getTrackingStatuses = getTrackingStatuses;
 exports.distanceKm = distanceKm;
 exports.getRoute = getRoute;
 exports.simplifyRoute = simplifyRoute;
@@ -81,79 +83,109 @@ async function endTripManually(tripId, status) {
     const prev = await getManual(tripId);
     await saveManual(tripId, { startedAt: prev?.startedAt || null, endedAt: new Date(), endStatus: status });
 }
-// Louage / bus: automatically "en_cours" from 15 min before departure until
-// 30 min after the planned arrival (6 h when no real arrival time is set).
+// Louage / bus become "en_cours" automatically 15 min before departure.
+// After that they STAY en_cours — however late — until the driver ends the
+// trip ("Terminer" / trip marked COMPLETED). Times are informational only.
 const WINDOW_BEFORE_MS = 15 * 60 * 1000;
-const WINDOW_AFTER_MS = 30 * 60 * 1000;
-const DEFAULT_DURATION_MS = 6 * 60 * 60 * 1000;
-function tripWindow(dep, arr) {
-    const start = dep.getTime() - WINDOW_BEFORE_MS;
-    const plannedArr = arr && arr.getTime() > dep.getTime() ? arr.getTime() : dep.getTime() + DEFAULT_DURATION_MS;
-    return { start, end: plannedArr + WINDOW_AFTER_MS };
+function tripWindow(dep) {
+    return { start: dep.getTime() - WINDOW_BEFORE_MS };
 }
 /**
- * Trip tracking status (no change to the Trip table):
+ * Trip tracking status — derived from statuses only, never from elapsed time:
  *  TRANSPORTER — from its parcels:
  *   - en_cours   → at least one shipment IN_TRANSIT (or started manually while parcels wait)
  *   - livre      → every shipment closed, at least one DELIVERED
  *   - annule     → every shipment CANCELLED
  *   - en_attente → otherwise
- *  LOUAGE / BUS — from the clock and the driver's buttons:
- *   - livre/annule → "Terminer" pressed (or trip marked COMPLETED)
- *   - en_cours     → "Démarrer" pressed, or now within the departure → arrival window
- *   - livre        → window is over
- *   - en_attente   → before the window
- * Returns null when the trip doesn't exist.
+ *  LOUAGE / BUS — from the driver's buttons (+ automatic start at departure):
+ *   - livre/annule → "Terminer" pressed, or trip marked COMPLETED
+ *   - en_cours     → "Démarrer" pressed, or departure time reached (stays en_cours if late)
+ *   - en_attente   → before departure
  */
+function deriveStatus(trip, manual, counts, now = Date.now()) {
+    const manualEnded = !!manual?.endedAt && (!manual.startedAt || manual.endedAt >= manual.startedAt);
+    const manualRunning = !!manual?.startedAt && !manualEnded;
+    const ended = manual?.endStatus || 'livre';
+    if (String(trip.type) === 'TRANSPORTER') {
+        const count = (s) => counts[s] || 0;
+        const total = Object.values(counts).reduce((n, c) => n + c, 0);
+        if (count('IN_TRANSIT') > 0)
+            return 'en_cours';
+        if (total > 0 && count('RECEIVED') === 0)
+            return count('DELIVERED') > 0 ? 'livre' : 'annule';
+        if (manualRunning)
+            return 'en_cours';
+        if (manualEnded)
+            return ended;
+        return 'en_attente';
+    }
+    if (manualEnded)
+        return ended;
+    if (String(trip.status) === 'COMPLETED')
+        return 'livre';
+    if (manualRunning)
+        return 'en_cours';
+    return now >= tripWindow(new Date(trip.departureTime)).start ? 'en_cours' : 'en_attente';
+}
+/** Status of one trip (cached 15 s). Returns null when the trip doesn't exist. */
 async function getTrackingStatus(tripId, fresh = false) {
     const cached = statusCache.get(tripId);
     if (!fresh && cached && Date.now() - cached.at < STATUS_TTL_MS)
         return cached.status;
     const trip = await db_1.default.trip.findUnique({
         where: { id: tripId },
-        select: { id: true, type: true, status: true, departureTime: true, arrivalTime: true },
+        select: { id: true, type: true, status: true, departureTime: true },
     });
     let status = null;
     if (trip) {
-        const manual = await getManual(tripId);
-        const manualEnded = !!manual?.endedAt && (!manual.startedAt || manual.endedAt >= manual.startedAt);
-        const manualRunning = !!manual?.startedAt && !manualEnded;
+        const counts = {};
         if (String(trip.type) === 'TRANSPORTER') {
-            const groups = await db_1.default.shipment.groupBy({
-                by: ['status'],
-                where: { tripId },
-                _count: { _all: true },
-            });
-            const count = (s) => groups.find(g => g.status === s)?._count._all || 0;
-            const total = groups.reduce((n, g) => n + g._count._all, 0);
-            if (count('IN_TRANSIT') > 0)
-                status = 'en_cours';
-            else if (total > 0 && count('RECEIVED') === 0)
-                status = count('DELIVERED') > 0 ? 'livre' : 'annule';
-            else if (manualRunning)
-                status = 'en_cours';
-            else if (manualEnded)
-                status = manual.endStatus || 'livre';
-            else
-                status = 'en_attente';
+            const groups = await db_1.default.shipment.groupBy({ by: ['status'], where: { tripId }, _count: { _all: true } });
+            for (const g of groups)
+                counts[g.status] = g._count._all;
         }
-        else if (manualEnded) {
-            status = manual.endStatus || 'livre';
-        }
-        else if (String(trip.status) === 'COMPLETED') {
-            status = 'livre';
-        }
-        else if (manualRunning) {
-            status = 'en_cours';
-        }
-        else {
-            const now = Date.now();
-            const w = tripWindow(new Date(trip.departureTime), trip.arrivalTime ? new Date(trip.arrivalTime) : null);
-            status = now < w.start ? 'en_attente' : now <= w.end ? 'en_cours' : 'livre';
-        }
+        status = deriveStatus(trip, await getManual(tripId), counts);
     }
     statusCache.set(tripId, { status, at: Date.now() });
     return status;
+}
+/**
+ * Same as getTrackingStatus for a whole list, in 2 queries (trip lists, search).
+ * Returns tripId → status.
+ */
+async function getTrackingStatuses(trips) {
+    const out = new Map();
+    if (!trips.length)
+        return out;
+    const ids = trips.map(t => t.id);
+    const transporterIds = trips.filter(t => String(t.type) === 'TRANSPORTER').map(t => t.id);
+    const [manualRows, groups] = await Promise.all([
+        dbTry(() => db.tripTracking.findMany({
+            where: { tripId: { in: ids } },
+            select: { tripId: true, startedAt: true, endedAt: true, endStatus: true },
+        }), []),
+        transporterIds.length
+            ? db_1.default.shipment.groupBy({ by: ['tripId', 'status'], where: { tripId: { in: transporterIds } }, _count: { _all: true } })
+            : Promise.resolve([]),
+    ]);
+    const manuals = new Map();
+    for (const r of manualRows)
+        manuals.set(r.tripId, { startedAt: r.startedAt, endedAt: r.endedAt, endStatus: r.endStatus });
+    const counts = new Map();
+    for (const g of groups) {
+        const c = counts.get(g.tripId) || {};
+        c[g.status] = g._count._all;
+        counts.set(g.tripId, c);
+    }
+    const now = Date.now();
+    for (const t of trips) {
+        // In-memory manual state wins (covers a missing TripTracking table).
+        const manual = manualCache.has(t.id) ? manualCache.get(t.id) : manuals.get(t.id) || null;
+        const status = deriveStatus(t, manual, counts.get(t.id) || {}, now);
+        out.set(t.id, status);
+        statusCache.set(t.id, { status, at: now });
+    }
+    return out;
 }
 // ─── Route history ───────────────────────────────
 const MAX_ROUTE_POINTS = 3000;

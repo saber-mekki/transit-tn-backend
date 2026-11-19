@@ -35,49 +35,25 @@ function formatTrip(trip) {
 // ─── GET /api/trips ──────────────────────────────
 exports.router.get('/', async (req, res) => {
     const { type, fromCity, toCity, operatorId, minPrice, maxPrice, minSeats, date, sortBy, limit, offset } = req.query;
-    const take = parseInt(limit) || 20;
+    // Operators load their own trips in one go (no time filter → there can be more than 20).
+    const take = Math.min(parseInt(limit) || (operatorId ? 200 : 20), 500);
     const skip = parseInt(offset) || 0;
+    // Visibility is decided by STATUS only — never by departure/arrival time.
+    // A trip stays listed (even hours late) until its driver ends it (COMPLETED).
     const where = { status: { not: 'COMPLETED' } };
     if (type)
         where.type = type.toUpperCase();
     if (operatorId)
         where.operatorId = operatorId;
-    // Price filter (applied on sub-tables via join)
-    // Seats filter
-    if (minSeats) {
-        where.OR = where.OR || [];
-        // filter done post-query for seats since it's in sub-table
-    }
-    // Date filter
+    // Optional "date" search filter chosen by the user (trips departing that day).
     if (date) {
         const d = new Date(date);
-        const nextDay = new Date(d);
-        nextDay.setDate(nextDay.getDate() + 1);
-        // Override the OR to also include date filter
-        where.AND = [
-            {
-                OR: [
-                    { departureTime: { gte: new Date() } },
-                    { departureTime: { gte: new Date('2099-01-01') } },
-                    { type: 'BUS' },
-                ]
-            },
-            {
-                OR: [
-                    { departureTime: { gte: d, lt: nextDay } },
-                    { departureTime: { gte: new Date('2099-01-01') } },
-                ]
-            }
-        ];
-        delete where.OR;
+        if (!isNaN(d.getTime())) {
+            const nextDay = new Date(d);
+            nextDay.setDate(nextDay.getDate() + 1);
+            where.departureTime = { gte: d, lt: nextDay };
+        }
     }
-    // Exclude expired trips but keep: bus trips, 2099 demo trips, future trips
-    const now = new Date();
-    where.OR = [
-        { departureTime: { gte: now } }, // future trips
-        { departureTime: { gte: new Date('2099-01-01') } }, // 2099 demo
-        { type: 'BUS' }, // all bus trips always visible
-    ];
     if (req.query.direction === 'tn-to-intl') {
         // fromCity is Tunisia (no comma = Tunisia city)
         where.fromCity = { not: { contains: ',' } };
@@ -97,7 +73,12 @@ exports.router.get('/', async (req, res) => {
             db_1.default.trip.findMany({ where, include: INCLUDE_ALL, orderBy: orderByClause, take, skip }),
             db_1.default.trip.count({ where })
         ]);
-        let formatted = trips.map(formatTrip);
+        // liveStatus: en_attente | en_cours (→ LIVE badge, live map) | livre | annule
+        const statuses = await (0, liveTracking_1.getTrackingStatuses)(trips);
+        let formatted = trips
+            .map(t => ({ ...formatTrip(t), liveStatus: statuses.get(t.id) || 'en_attente' }))
+            // louage/bus ended with "Terminer" (TripTracking) but not yet COMPLETED
+            .filter((t) => t.type === 'transporter' || (t.liveStatus !== 'livre' && t.liveStatus !== 'annule'));
         if (minPrice)
             formatted = formatted.filter((t) => !t.price || t.price >= parseFloat(minPrice));
         if (maxPrice)

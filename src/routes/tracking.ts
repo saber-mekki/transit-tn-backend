@@ -107,8 +107,8 @@ router.get('/tracking/mine', trackingLimiter, authenticate, async (req: AuthRequ
         operatorId: me,
         status: { not: 'COMPLETED' },
         OR: [
-          // inside (or just before) the departure window
-          { type: { in: ['LOUAGE', 'BUS'] }, departureTime: { lte: new Date(now + 15 * 60_000), gte: new Date(now - 48 * 3600_000) } },
+          // departed (or departing within 15 min) and not ended — however late
+          { type: { in: ['LOUAGE', 'BUS'] }, departureTime: { lte: new Date(now + 15 * 60_000) } },
           // started by hand, whatever the date
           { liveTracking: { is: { startedAt: { not: null }, endedAt: null } } } as any,
         ],
@@ -121,7 +121,7 @@ router.get('/tracking/mine', trackingLimiter, authenticate, async (req: AuthRequ
       prisma.trip.findMany({
         where: {
           operatorId: me, status: { not: 'COMPLETED' }, type: { in: ['LOUAGE', 'BUS'] },
-          departureTime: { lte: new Date(now + 15 * 60_000), gte: new Date(now - 48 * 3600_000) },
+          departureTime: { lte: new Date(now + 15 * 60_000) },
         },
         orderBy: { departureTime: 'desc' }, take: 10, select: tripSelect,
       }));
@@ -161,6 +161,8 @@ router.post('/:tripId/tracking/stop', trackingLimiter, smallJson, authenticate, 
     if (!(await ownTrip(req, res))) return;
     const status = req.body?.status === 'annule' ? 'annule' : 'livre';
     await endTripManually(req.params.tripId, status);
+    // Ending the trip is what removes it from search + live map (status-based visibility).
+    await prisma.trip.update({ where: { id: req.params.tripId }, data: { status: 'COMPLETED', completedAt: new Date() } });
     await refreshTracking(req.params.tripId);
     return res.json({ status: await getTrackingStatus(req.params.tripId, true) });
   } catch (e) {

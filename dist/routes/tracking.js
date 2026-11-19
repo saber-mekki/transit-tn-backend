@@ -139,8 +139,8 @@ exports.router.get('/tracking/mine', exports.trackingLimiter, auth_1.authenticat
                 operatorId: me,
                 status: { not: 'COMPLETED' },
                 OR: [
-                    // inside (or just before) the departure window
-                    { type: { in: ['LOUAGE', 'BUS'] }, departureTime: { lte: new Date(now + 15 * 60000), gte: new Date(now - 48 * 3600000) } },
+                    // departed (or departing within 15 min) and not ended — however late
+                    { type: { in: ['LOUAGE', 'BUS'] }, departureTime: { lte: new Date(now + 15 * 60000) } },
                     // started by hand, whatever the date
                     { liveTracking: { is: { startedAt: { not: null }, endedAt: null } } },
                 ],
@@ -153,7 +153,7 @@ exports.router.get('/tracking/mine', exports.trackingLimiter, auth_1.authenticat
         db_1.default.trip.findMany({
             where: {
                 operatorId: me, status: { not: 'COMPLETED' }, type: { in: ['LOUAGE', 'BUS'] },
-                departureTime: { lte: new Date(now + 15 * 60000), gte: new Date(now - 48 * 3600000) },
+                departureTime: { lte: new Date(now + 15 * 60000) },
             },
             orderBy: { departureTime: 'desc' }, take: 10, select: tripSelect,
         }));
@@ -198,6 +198,8 @@ exports.router.post('/:tripId/tracking/stop', exports.trackingLimiter, smallJson
             return;
         const status = req.body?.status === 'annule' ? 'annule' : 'livre';
         await (0, liveTracking_1.endTripManually)(req.params.tripId, status);
+        // Ending the trip is what removes it from search + live map (status-based visibility).
+        await db_1.default.trip.update({ where: { id: req.params.tripId }, data: { status: 'COMPLETED', completedAt: new Date() } });
         await (0, liveTracking_1.refreshTracking)(req.params.tripId);
         return res.json({ status: await (0, liveTracking_1.getTrackingStatus)(req.params.tripId, true) });
     }
