@@ -23,6 +23,8 @@ const stats_1 = require("./routes/stats");
 const contact_1 = require("./routes/contact");
 const shipments_1 = require("./routes/shipments");
 const expenses_1 = require("./routes/expenses");
+const tracking_1 = require("./routes/tracking");
+const shipmentTracking_1 = require("./routes/shipmentTracking");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3001;
@@ -30,6 +32,9 @@ const PORT = process.env.PORT || 3001;
 app.use((0, helmet_1.default)());
 app.set('trust proxy', 1);
 app.use((0, cors_1.default)());
+// ─── LIVE TRACKING (before the global limiter: own limiter + SSE) ──
+app.use('/api/trips', tracking_1.router);
+app.use('/api/tracking', shipmentTracking_1.router);
 // Rate limiting — 100 requests per 15 min per IP
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,

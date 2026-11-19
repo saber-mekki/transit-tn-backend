@@ -19,6 +19,8 @@ import { router as statsRoutes }            from './routes/stats';
 import { router as contactRoutes }          from './routes/contact';
 import { router as shipmentRoutes }         from './routes/shipments';
 import { router as expenseRoutes }          from './routes/expenses';
+import { router as trackingRoutes }         from './routes/tracking';
+import { router as shipmentTrackingRoutes } from './routes/shipmentTracking';
 
 dotenv.config();
 
@@ -30,6 +32,10 @@ app.use(helmet());
 app.set('trust proxy', 1);
 
 app.use(cors());
+
+// ─── LIVE TRACKING (before the global limiter: own limiter + SSE) ──
+app.use('/api/trips', trackingRoutes);
+app.use('/api/tracking', shipmentTrackingRoutes);
 
 // Rate limiting — 100 requests per 15 min per IP
 const limiter = rateLimit({

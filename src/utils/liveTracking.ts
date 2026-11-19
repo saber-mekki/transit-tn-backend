@@ -1,0 +1,350 @@
+// ─── LIVE TRACKING ───────────────────────────────────────────────────
+// Latest driver position per trip + SSE subscribers, in memory (fast).
+// Route history is kept in memory too and saved to the DB every 5 min / ~1 km
+// (TripLocationPoint) so the traveled path survives a restart.
+// Single-instance only (Render free tier).
+//
+// The two tracking tables are optional at runtime: if they don't exist yet
+// (schema not pushed), everything keeps working from memory only.
+import { Response } from 'express';
+import prisma from '../db';
+
+export type TrackingStatus = 'en_attente' | 'en_cours' | 'livre' | 'annule';
+
+export interface LiveLocation {
+  lat: number;
+  lng: number;
+  speed: number | null;   // m/s
+  heading: number | null; // degrees
+  updatedAt: string;      // ISO
+  timestamp?: string;     // same as updatedAt (field name used by external clients)
+}
+
+/** Public trip info sent with live-map updates (so the map can show trips it didn't load). */
+export interface LiveTripMeta {
+  type: string;           // louage | bus | transporter
+  operatorName: string;
+  fromCity: string;
+  toCity: string;
+  departureTime?: string | null;
+}
+
+/** [lat, lng, epoch ms] */
+export type RoutePoint = [number, number, number];
+
+const locations = new Map<string, LiveLocation>();
+const metas = new Map<string, LiveTripMeta>();
+const streams = new Map<string, Set<Response>>();   // per-trip viewers
+const mapStreams = new Set<Response>();              // live-map page (all trips)
+
+// Short cache so a POST every 30s doesn't hit the DB every time.
+const STATUS_TTL_MS = 15_000;
+const statusCache = new Map<string, { status: TrackingStatus | null; at: number }>();
+
+export const MAX_STREAMS_PER_TRIP = 50;
+export const MAX_MAP_STREAMS = 500;
+
+// ─── Optional DB tables ──────────────────────────
+let trackingTablesOk = true;
+function isMissingTable(e: any) {
+  return e?.code === 'P2021' || e?.code === 'P2022' || /does not exist/i.test(String(e?.message || ''));
+}
+async function dbTry<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+  if (!trackingTablesOk) return fallback;
+  try {
+    return await fn();
+  } catch (e: any) {
+    if (isMissingTable(e)) {
+      trackingTablesOk = false;
+      console.warn('[live-tracking] TripTracking/TripLocationPoint tables missing — run `npx prisma db push`. Using memory only.');
+    } else {
+      console.error('[live-tracking] DB error:', e?.message);
+    }
+    return fallback;
+  }
+}
+const db: any = prisma; // new models; typed access would break builds with an old generated client
+
+// ─── Manual start / end (louage, bus — and transporter without parcels) ─
+type Manual = { startedAt: Date | null; endedAt: Date | null; endStatus: string | null };
+const manualCache = new Map<string, Manual | null>();
+
+async function getManual(tripId: string): Promise<Manual | null> {
+  if (manualCache.has(tripId)) return manualCache.get(tripId)!;
+  const row = await dbTry(
+    () => db.tripTracking.findUnique({ where: { tripId }, select: { startedAt: true, endedAt: true, endStatus: true } }),
+    null,
+  );
+  manualCache.set(tripId, row || null);
+  return row || null;
+}
+
+async function saveManual(tripId: string, m: Manual) {
+  manualCache.set(tripId, m);
+  await dbTry(() => db.tripTracking.upsert({
+    where: { tripId },
+    create: { tripId, ...m },
+    update: m,
+  }), null);
+}
+
+/** Driver pressed "Démarrer le trajet". */
+export async function startTripManually(tripId: string) {
+  await saveManual(tripId, { startedAt: new Date(), endedAt: null, endStatus: null });
+}
+/** Driver pressed "Terminer" / trip cancelled. */
+export async function endTripManually(tripId: string, status: 'livre' | 'annule') {
+  const prev = await getManual(tripId);
+  await saveManual(tripId, { startedAt: prev?.startedAt || null, endedAt: new Date(), endStatus: status });
+}
+
+// Louage / bus: automatically "en_cours" from 15 min before departure until
+// 30 min after the planned arrival (6 h when no real arrival time is set).
+const WINDOW_BEFORE_MS = 15 * 60 * 1000;
+const WINDOW_AFTER_MS = 30 * 60 * 1000;
+const DEFAULT_DURATION_MS = 6 * 60 * 60 * 1000;
+export function tripWindow(dep: Date, arr: Date | null) {
+  const start = dep.getTime() - WINDOW_BEFORE_MS;
+  const plannedArr = arr && arr.getTime() > dep.getTime() ? arr.getTime() : dep.getTime() + DEFAULT_DURATION_MS;
+  return { start, end: plannedArr + WINDOW_AFTER_MS };
+}
+
+/**
+ * Trip tracking status (no change to the Trip table):
+ *  TRANSPORTER — from its parcels:
+ *   - en_cours   → at least one shipment IN_TRANSIT (or started manually while parcels wait)
+ *   - livre      → every shipment closed, at least one DELIVERED
+ *   - annule     → every shipment CANCELLED
+ *   - en_attente → otherwise
+ *  LOUAGE / BUS — from the clock and the driver's buttons:
+ *   - livre/annule → "Terminer" pressed (or trip marked COMPLETED)
+ *   - en_cours     → "Démarrer" pressed, or now within the departure → arrival window
+ *   - livre        → window is over
+ *   - en_attente   → before the window
+ * Returns null when the trip doesn't exist.
+ */
+export async function getTrackingStatus(tripId: string, fresh = false): Promise<TrackingStatus | null> {
+  const cached = statusCache.get(tripId);
+  if (!fresh && cached && Date.now() - cached.at < STATUS_TTL_MS) return cached.status;
+
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { id: true, type: true, status: true, departureTime: true, arrivalTime: true },
+  });
+  let status: TrackingStatus | null = null;
+  if (trip) {
+    const manual = await getManual(tripId);
+    const manualEnded = !!manual?.endedAt && (!manual.startedAt || manual.endedAt >= manual.startedAt);
+    const manualRunning = !!manual?.startedAt && !manualEnded;
+
+    if (String(trip.type) === 'TRANSPORTER') {
+      const groups = await prisma.shipment.groupBy({
+        by: ['status'],
+        where: { tripId },
+        _count: { _all: true },
+      });
+      const count = (s: string) => groups.find(g => g.status === s)?._count._all || 0;
+      const total = groups.reduce((n, g) => n + g._count._all, 0);
+      if (count('IN_TRANSIT') > 0) status = 'en_cours';
+      else if (total > 0 && count('RECEIVED') === 0) status = count('DELIVERED') > 0 ? 'livre' : 'annule';
+      else if (manualRunning) status = 'en_cours';
+      else if (manualEnded) status = (manual!.endStatus as TrackingStatus) || 'livre';
+      else status = 'en_attente';
+    } else if (manualEnded) {
+      status = (manual!.endStatus as TrackingStatus) || 'livre';
+    } else if (String(trip.status) === 'COMPLETED') {
+      status = 'livre';
+    } else if (manualRunning) {
+      status = 'en_cours';
+    } else {
+      const now = Date.now();
+      const w = tripWindow(new Date(trip.departureTime), trip.arrivalTime ? new Date(trip.arrivalTime) : null);
+      status = now < w.start ? 'en_attente' : now <= w.end ? 'en_cours' : 'livre';
+    }
+  }
+  statusCache.set(tripId, { status, at: Date.now() });
+  return status;
+}
+
+// ─── Route history ───────────────────────────────
+const MAX_ROUTE_POINTS = 3000;
+const MIN_ROUTE_STEP_KM = 0.03;
+const SAVE_EVERY_MS = 5 * 60 * 1000;
+const SAVE_EVERY_KM = 1;
+const routes = new Map<string, { points: RoutePoint[]; loaded: boolean }>();
+const lastSaved = new Map<string, { lat: number; lng: number; at: number }>();
+
+export function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const R = 6371, rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function persistPoint(tripId: string, loc: LiveLocation, force = false) {
+  const now = Date.now();
+  const prev = lastSaved.get(tripId);
+  if (!force && prev && now - prev.at < SAVE_EVERY_MS && distanceKm(prev, loc) < SAVE_EVERY_KM) return;
+  if (prev && prev.lat === loc.lat && prev.lng === loc.lng) return;
+  lastSaved.set(tripId, { lat: loc.lat, lng: loc.lng, at: now });
+  // Fire and forget: tracking must never wait on the DB.
+  dbTry(() => db.tripLocationPoint.create({
+    data: { tripId, lat: loc.lat, lng: loc.lng, speed: loc.speed, recordedAt: new Date(loc.updatedAt) },
+  }), null);
+}
+
+function recordPoint(tripId: string, loc: LiveLocation) {
+  let r = routes.get(tripId);
+  if (!r) { r = { points: [], loaded: false }; routes.set(tripId, r); }
+  const last = r.points[r.points.length - 1];
+  if (!last || distanceKm({ lat: last[0], lng: last[1] }, loc) >= MIN_ROUTE_STEP_KM) {
+    r.points.push([loc.lat, loc.lng, new Date(loc.updatedAt).getTime()]);
+    if (r.points.length > MAX_ROUTE_POINTS) {
+      // Halve the resolution, keep the newest point.
+      r.points = r.points.filter((_, i, a) => i % 2 === 0 || i === a.length - 1);
+    }
+  }
+  persistPoint(tripId, loc);
+}
+
+/** Traveled path (oldest → newest). Loads saved points after a restart. */
+export async function getRoute(tripId: string): Promise<RoutePoint[]> {
+  let r = routes.get(tripId);
+  if (r?.loaded) return r.points;
+  const saved: any[] = await dbTry(() => db.tripLocationPoint.findMany({
+    where: { tripId },
+    orderBy: { recordedAt: 'asc' },
+    take: 5000,
+    select: { lat: true, lng: true, recordedAt: true },
+  }), []);
+  const fromDb: RoutePoint[] = saved.map(p => [p.lat, p.lng, new Date(p.recordedAt).getTime()]);
+  // Memory has every point since this process started; the DB fills in what
+  // happened before (e.g. after a restart).
+  const mem = routes.get(tripId)?.points || [];
+  const firstMem = mem.length ? mem[0][2] : Infinity;
+  r = { points: [...fromDb.filter(p => p[2] < firstMem), ...mem], loaded: true };
+  // Only cache trips that are live (others are read once and dropped).
+  if (locations.has(tripId)) routes.set(tripId, r);
+  return r.points;
+}
+
+/** At most `max` points, evenly sampled, always keeping the last one. */
+export function simplifyRoute(points: RoutePoint[], max = 800): [number, number][] {
+  if (points.length <= max) return points.map(p => [p[0], p[1]]);
+  const step = points.length / max;
+  const out: [number, number][] = [];
+  for (let i = 0; i < max - 1; i++) { const p = points[Math.floor(i * step)]; out.push([p[0], p[1]]); }
+  const last = points[points.length - 1];
+  out.push([last[0], last[1]]);
+  return out;
+}
+
+export function getLocation(tripId: string): LiveLocation | null {
+  return locations.get(tripId) || null;
+}
+
+function write(res: Response, event: string, data: unknown) {
+  try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* socket gone */ }
+}
+
+export function sendEvent(res: Response, event: string, data: unknown) {
+  write(res, event, data);
+}
+
+export function streamCount(tripId: string): number {
+  return streams.get(tripId)?.size || 0;
+}
+
+export function addStream(tripId: string, res: Response) {
+  let set = streams.get(tripId);
+  if (!set) { set = new Set(); streams.set(tripId, set); }
+  set.add(res);
+}
+
+export function removeStream(tripId: string, res: Response) {
+  const set = streams.get(tripId);
+  if (!set) return;
+  set.delete(res);
+  if (set.size === 0) streams.delete(tripId);
+}
+
+export function publishLocation(tripId: string, loc: LiveLocation, meta?: LiveTripMeta) {
+  locations.set(tripId, loc);
+  recordPoint(tripId, loc);
+  if (meta) metas.set(tripId, meta);
+  streams.get(tripId)?.forEach(res => write(res, 'location', loc));
+  if (mapStreams.size) {
+    const payload = { tripId, ...loc, trip: metas.get(tripId) || null };
+    mapStreams.forEach(res => write(res, 'location', payload));
+  }
+}
+
+// ─── Live map (all trips) ────────────────────────
+export function liveSnapshot() {
+  return [...locations.entries()].map(([tripId, loc]) => ({ tripId, ...loc, trip: metas.get(tripId) || null }));
+}
+export function addMapStream(res: Response) { mapStreams.add(res); }
+export function removeMapStream(res: Response) { mapStreams.delete(res); }
+export function mapStreamCount() { return mapStreams.size; }
+
+function broadcastRemove(tripId: string, status: TrackingStatus | null) {
+  mapStreams.forEach(res => write(res, 'remove', { tripId, status }));
+}
+
+/** Free memory for a trip and close its streams with a final status event. */
+export function endTracking(tripId: string, status: TrackingStatus | null) {
+  const last = locations.get(tripId);
+  if (last && status !== 'annule') persistPoint(tripId, last, true); // keep the arrival point
+  routes.delete(tripId);
+  lastSaved.delete(tripId);
+  const hadLocation = locations.delete(tripId);
+  metas.delete(tripId);
+  if (hadLocation) broadcastRemove(tripId, status);
+  const set = streams.get(tripId);
+  if (set) {
+    set.forEach(res => {
+      write(res, 'end', { status });
+      try { res.end(); } catch { /* ignore */ }
+    });
+    streams.delete(tripId);
+  }
+}
+
+/**
+ * Call after anything that may change a trip's shipment statuses.
+ * Recomputes the status and, if the trip is no longer en_cours
+ * (livré / annulé / back to waiting / deleted), wipes its live data.
+ */
+export async function refreshTracking(tripId: string | null | undefined) {
+  if (!tripId) return;
+  try {
+    const status = await getTrackingStatus(tripId, true);
+    if (status === 'en_cours') {
+      streams.get(tripId)?.forEach(res => write(res, 'status', { status }));
+    } else {
+      endTracking(tripId, status);
+    }
+  } catch (e) {
+    console.error('refreshTracking error:', (e as Error).message);
+  }
+}
+
+// Safety net: drop positions not refreshed for 2h when nobody is watching.
+const STALE_MS = 2 * 60 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [tripId, loc] of locations) {
+    if (now - new Date(loc.updatedAt).getTime() > STALE_MS && streamCount(tripId) === 0) {
+      locations.delete(tripId);
+      metas.delete(tripId);
+      routes.delete(tripId);
+      lastSaved.delete(tripId);
+      broadcastRemove(tripId, null);
+    }
+  }
+  for (const tripId of routes.keys()) if (!locations.has(tripId)) routes.delete(tripId);
+  if (manualCache.size > 5000) manualCache.clear();
+  for (const [tripId, c] of statusCache) {
+    if (now - c.at > STATUS_TTL_MS * 4) statusCache.delete(tripId);
+  }
+}, 10 * 60 * 1000).unref();

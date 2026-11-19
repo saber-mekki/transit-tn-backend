@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../db';
 import { authenticate, requireOperator, AuthRequest } from '../middleware/auth';
+import { refreshTracking } from '../utils/liveTracking';
 
 export const router = Router();
 
@@ -62,17 +63,44 @@ router.get('/', authenticate, requireOperator, async (req: AuthRequest, res: Res
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
 
+const VALID_STATUSES = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
+
 router.put('/bulk-status', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
   const { tripId, status } = req.body;
-  const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
-  if (!status || !validStatuses.includes(status))
+  if (!status || !VALID_STATUSES.includes(status))
     return res.status(400).json({ message: 'Invalid status' });
+  try {
+    const where: any = { operatorId: req.user!.id };
+    if (tripId === 'no_trip') {
+      where.tripId = null;
+    } else if (tripId) {
+      where.tripId = tripId;
+    } else {
+      return res.status(400).json({ message: 'Missing tripId' });
+    }
+    const result = await prisma.shipment.updateMany({ where, data: { status } });
+    if (tripId !== 'no_trip') await refreshTracking(tripId);
+    return res.json({ updated: result.count });
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
 
 router.put('/:id/status', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
   const { status } = req.body;
-  const validStatuses = ['RECEIVED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED'];
-  if (!validStatuses.includes(status))
+  if (!VALID_STATUSES.includes(status))
     return res.status(400).json({ message: 'Invalid status' });
+  try {
+    const shipment = await prisma.shipment.findUnique({ where: { id: req.params.id } });
+    if (!shipment) return res.status(404).json({ message: 'Shipment not found' });
+    if (shipment.operatorId !== req.user!.id)
+      return res.status(403).json({ message: 'Forbidden' });
+    const updated = await prisma.shipment.update({
+      where: { id: req.params.id },
+      data: { status }
+    });
+    await refreshTracking(shipment.tripId);
+    return res.json(updated);
+  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
+});
 
 router.put('/:id', authenticate, requireOperator, async (req: AuthRequest, res: Response) => {
   const { senderName, senderPhone, receiverName, receiverPhone, description, fromCity, toCity, price, weight, notes, tripId } = req.body;
@@ -98,35 +126,11 @@ router.put('/:id', authenticate, requireOperator, async (req: AuthRequest, res: 
       },
       include: { trip: { select: { id: true, fromCity: true, toCity: true, departureTime: true } } }
     });
-    return res.json(updated);
-  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
-});
-
-
-  try {
-    const shipment = await prisma.shipment.findUnique({ where: { id: req.params.id } });
-    if (!shipment) return res.status(404).json({ message: 'Shipment not found' });
-    if (shipment.operatorId !== req.user!.id)
-      return res.status(403).json({ message: 'Forbidden' });
-    const updated = await prisma.shipment.update({
-      where: { id: req.params.id },
-      data: { status }
-    });
-    return res.json(updated);
-  } catch (e) { return res.status(500).json({ message: 'Server error' }); }
-});
-
-  try {
-    const where: any = { operatorId: req.user!.id };
-    if (tripId === 'no_trip') {
-      where.tripId = null;
-    } else if (tripId) {
-      where.tripId = tripId;
-    } else {
-      return res.status(400).json({ message: 'Missing tripId' });
+    if (updated.tripId !== shipment.tripId) {
+      await refreshTracking(shipment.tripId);
+      await refreshTracking(updated.tripId);
     }
-    const result = await prisma.shipment.updateMany({ where, data: { status } });
-    return res.json({ updated: result.count });
+    return res.json(updated);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });
 
@@ -147,6 +151,7 @@ router.delete('/:id', authenticate, requireOperator, async (req: AuthRequest, re
     if (shipment.operatorId !== req.user!.id)
       return res.status(403).json({ message: 'Forbidden' });
     await prisma.shipment.delete({ where: { id: req.params.id } });
+    await refreshTracking(shipment.tripId);
     return res.json({ message: 'Deleted' });
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });

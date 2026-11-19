@@ -22,7 +22,18 @@ export const authenticate = (req: AuthRequest, res: Response, next: NextFunction
   }
 };
 
-export const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
+// Like authenticate, but lets anonymous requests through (req.user stays undefined).
+export const optionalAuth = (req: AuthRequest, _res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      req.user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET) as { id: string; role: string; username: string };
+    } catch { /* invalid token → treated as anonymous */ }
+  }
+  next();
+};
+
+export const requireAdmin =(req: AuthRequest, res: Response, next: NextFunction) => {
   if (req.user?.role !== 'ADMIN') {
     return res.status(403).json({ message: 'Admin access required' });
   }

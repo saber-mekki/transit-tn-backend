@@ -36,7 +36,7 @@ exports.router.post('/signup', async (req, res) => {
         const hashed = await bcryptjs_1.default.hash(password, 12);
         const user = await db_1.default.user.create({
             data: { username, password: hashed, displayName, role: role.toUpperCase(), email, phone: phone || null },
-            select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true },
+            select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true, plan: true, planExpiresAt: true },
         });
         // Notify all admins
         const admins = await db_1.default.user.findMany({ where: { role: 'ADMIN' } });
@@ -91,12 +91,30 @@ exports.router.post('/login', async (req, res) => {
     }
 });
 // ─── POST /api/auth/google ────────────────────────
+// Audience = the web client ID the app passes to GoogleSignin.configure
+const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || '124636272128-eg5v01of98ev5mfb85p8evikqoermofl.apps.googleusercontent.com')
+    .split(',').map(s => s.trim()).filter(Boolean);
+async function verifyGoogleIdToken(idToken) {
+    const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+    if (!r.ok)
+        return null;
+    const info = await r.json();
+    const issOk = info.iss === 'accounts.google.com' || info.iss === 'https://accounts.google.com';
+    const verified = info.email_verified === true || info.email_verified === 'true';
+    if (!issOk || !GOOGLE_CLIENT_IDS.includes(info.aud) || !verified || !info.email)
+        return null;
+    return { email: String(info.email).toLowerCase(), displayName: info.name };
+}
 exports.router.post('/google', async (req, res) => {
-    const { email, displayName, googleId } = req.body;
-    if (!email)
-        return res.status(400).json({ message: 'Email required' });
+    const { idToken } = req.body;
+    if (!idToken || typeof idToken !== 'string')
+        return res.status(400).json({ message: 'idToken required' });
     try {
-        let user = await db_1.default.user.findFirst({ where: { email } });
+        const google = await verifyGoogleIdToken(idToken);
+        if (!google)
+            return res.status(401).json({ message: 'Invalid Google token' });
+        const { email, displayName } = google;
+        let user = await db_1.default.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
         const isNewUser = !user;
         if (!user) {
             // Auto-create account
@@ -165,10 +183,23 @@ exports.router.put('/profile', auth_1.authenticate, async (req, res) => {
         }
         const user = await db_1.default.user.update({
             where: { id: req.user.id },
-            data: { displayName, email: email || null, phone: phone || null, bio: bio || null, pushToken: pushToken || null },
+            data: { displayName, email: email || null, phone: phone || null, bio: bio || null, pushToken: pushToken === undefined ? undefined : pushToken || null },
             select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true }
         });
         return res.json(user);
+    }
+    catch (error) {
+        return res.status(500).json({ message: 'Server error' });
+    }
+});
+// ─── PUT /api/auth/push-token ────────────────────
+exports.router.put('/push-token', auth_1.authenticate, async (req, res) => {
+    const { pushToken } = req.body;
+    if (pushToken !== null && typeof pushToken !== 'string')
+        return res.status(400).json({ message: 'pushToken must be a string or null' });
+    try {
+        await db_1.default.user.update({ where: { id: req.user.id }, data: { pushToken } });
+        return res.json({ ok: true });
     }
     catch (error) {
         return res.status(500).json({ message: 'Server error' });
@@ -179,7 +210,7 @@ exports.router.get('/me', auth_1.authenticate, async (req, res) => {
     try {
         const user = await db_1.default.user.findUnique({
             where: { id: req.user.id },
-            select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true },
+            select: { id: true, username: true, displayName: true, role: true, email: true, phone: true, bio: true, createdAt: true, plan: true, planExpiresAt: true },
         });
         if (!user)
             return res.status(404).json({ message: 'User not found' });

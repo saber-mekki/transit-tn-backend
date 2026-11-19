@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { TransportType } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, requireOperator, AuthRequest } from '../middleware/auth';
+import { endTracking, refreshTracking } from '../utils/liveTracking';
 
 export const router = Router();
 
@@ -289,6 +290,7 @@ router.delete('/:id', authenticate, requireOperator, async (req: AuthRequest, re
       return res.status(403).json({ message: 'You can only delete your own trips' });
     }
     await prisma.trip.delete({ where: { id } });
+    endTracking(id, 'annule');
     return res.status(204).send();
   } catch (error: any) {
     return res.status(500).json({ message: error.message || 'Error deleting trip' });
@@ -311,6 +313,7 @@ router.put('/:id/complete', authenticate, async (req: AuthRequest, res: Response
       where: { tripId: req.params.id, status: 'RECEIVED' },
       data: { status: 'IN_TRANSIT' }
     });
+    await refreshTracking(req.params.id);
     return res.json(updated);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }
 });

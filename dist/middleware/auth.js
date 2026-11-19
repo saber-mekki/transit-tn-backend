@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateToken = exports.requireOperator = exports.requireAdmin = exports.authenticate = void 0;
+exports.generateToken = exports.requireOperator = exports.requireAdmin = exports.optionalAuth = exports.authenticate = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const JWT_SECRET = process.env.JWT_SECRET || 'transit-tn-secret-change-in-production';
 const authenticate = (req, res, next) => {
@@ -22,6 +22,18 @@ const authenticate = (req, res, next) => {
     }
 };
 exports.authenticate = authenticate;
+// Like authenticate, but lets anonymous requests through (req.user stays undefined).
+const optionalAuth = (req, _res, next) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+            req.user = jsonwebtoken_1.default.verify(authHeader.split(' ')[1], JWT_SECRET);
+        }
+        catch { /* invalid token → treated as anonymous */ }
+    }
+    next();
+};
+exports.optionalAuth = optionalAuth;
 const requireAdmin = (req, res, next) => {
     if (req.user?.role !== 'ADMIN') {
         return res.status(403).json({ message: 'Admin access required' });

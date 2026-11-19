@@ -85,6 +85,34 @@ model Trip {
   louageTrip      LouageTrip?
   busTrip         BusTrip?
   transporterTrip TransporterTrip?
+  liveTracking    TripTracking?
+  locationPoints  TripLocationPoint[]
+}
+
+// ─── LIVE TRACKING ───────────────────────────────
+// Manual start/end of a trip's live tracking (louage/bus: "Démarrer le trajet").
+// Separate table on purpose: no new column on Trip, so existing queries keep
+// working even before this table is created on the server.
+model TripTracking {
+  tripId    String    @id
+  trip      Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  startedAt DateTime?
+  endedAt   DateTime?
+  endStatus String?   // livre | annule
+  updatedAt DateTime  @updatedAt
+}
+
+// GPS route history (saved every 5 min or ~1 km), used to draw the traveled path.
+model TripLocationPoint {
+  id         Int      @id @default(autoincrement())
+  trip       Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tripId     String
+  lat        Float
+  lng        Float
+  speed      Float?
+  recordedAt DateTime @default(now())
+
+  @@index([tripId, recordedAt])
 }
 
 model LouageTrip {

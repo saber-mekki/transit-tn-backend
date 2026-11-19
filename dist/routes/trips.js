@@ -8,6 +8,7 @@ const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const db_1 = __importDefault(require("../db"));
 const auth_1 = require("../middleware/auth");
+const liveTracking_1 = require("../utils/liveTracking");
 exports.router = (0, express_1.Router)();
 const INCLUDE_ALL = {
     louageTrip: { include: { station: true } },
@@ -327,6 +328,7 @@ exports.router.delete('/:id', auth_1.authenticate, auth_1.requireOperator, async
             return res.status(403).json({ message: 'You can only delete your own trips' });
         }
         await db_1.default.trip.delete({ where: { id } });
+        (0, liveTracking_1.endTracking)(id, 'annule');
         return res.status(204).send();
     }
     catch (error) {
@@ -350,6 +352,7 @@ exports.router.put('/:id/complete', auth_1.authenticate, async (req, res) => {
             where: { tripId: req.params.id, status: 'RECEIVED' },
             data: { status: 'IN_TRANSIT' }
         });
+        await (0, liveTracking_1.refreshTracking)(req.params.id);
         return res.json(updated);
     }
     catch (e) {
