@@ -141,7 +141,8 @@ exports.router.get('/:id', async (req, res) => {
         const trip = await db_1.default.trip.findUnique({ where: { id: req.params.id }, include: INCLUDE_ALL });
         if (!trip)
             return res.status(404).json({ message: 'Trip not found' });
-        return res.json(formatTrip(trip));
+        const liveStatus = (await (0, liveTracking_1.getTrackingStatuses)([trip])).get(trip.id) || 'en_attente';
+        return res.json({ ...formatTrip(trip), liveStatus, isTimetable: (0, liveTracking_1.isTimetableTrip)(trip) });
     }
     catch (error) {
         return res.status(500).json({ message: 'Error fetching trip' });
@@ -330,6 +331,8 @@ exports.router.put('/:id/complete', auth_1.authenticate, async (req, res) => {
             where: { id: req.params.id },
             data: { status: 'COMPLETED', completedAt: new Date() }
         });
+        // "Terminer" ends live tracking for every type (transporter parcels included).
+        await (0, liveTracking_1.endTripManually)(req.params.id, 'livre');
         // Auto-update linked shipments to IN_TRANSIT
         await db_1.default.shipment.updateMany({
             where: { tripId: req.params.id, status: 'RECEIVED' },

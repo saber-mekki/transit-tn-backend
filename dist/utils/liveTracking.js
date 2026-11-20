@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.STALE_TRIP_DAYS = exports.MAX_MAP_STREAMS = exports.MAX_STREAMS_PER_TRIP = void 0;
 exports.startTripManually = startTripManually;
+exports.manualRunningTripIds = manualRunningTripIds;
 exports.endTripManually = endTripManually;
 exports.tripWindow = tripWindow;
 exports.isTimetableTrip = isTimetableTrip;
@@ -80,6 +81,15 @@ async function saveManual(tripId, m) {
 async function startTripManually(tripId) {
     await saveManual(tripId, { startedAt: new Date(), endedAt: null, endStatus: null });
 }
+/** Trips started by hand and not ended, newest first (from memory — works without the TripTracking table). */
+function manualRunningTripIds() {
+    const running = [];
+    for (const [id, m] of manualCache) {
+        if (m?.startedAt && !(m.endedAt && m.endedAt >= m.startedAt))
+            running.push({ id, at: new Date(m.startedAt).getTime() });
+    }
+    return running.sort((a, b) => b.at - a.at).map(r => r.id); // most recently started first
+}
 /** Driver pressed "Terminer" / trip cancelled. */
 async function endTripManually(tripId, status) {
     const prev = await getManual(tripId);
@@ -101,7 +111,7 @@ function isTimetableTrip(trip) {
 }
 /**
  * Trip tracking status — derived from statuses only, never from elapsed time:
- *  TRANSPORTER — from its parcels:
+ *  TRANSPORTER — "Terminer"/"Annuler" first, then "Démarrer", then its parcels:
  *   - en_cours   → at least one shipment IN_TRANSIT (or started manually while parcels wait)
  *   - livre      → every shipment closed, at least one DELIVERED
  *   - annule     → every shipment CANCELLED
@@ -119,14 +129,16 @@ function deriveStatus(trip, manual, counts, now = Date.now()) {
     if (String(trip.type) === 'TRANSPORTER') {
         const count = (s) => counts[s] || 0;
         const total = Object.values(counts).reduce((n, c) => n + c, 0);
+        if (manualEnded)
+            return ended; // "Terminer" / "Annuler" always wins
+        if (isTimetableTrip(trip))
+            return 'en_attente';
+        if (manualRunning)
+            return 'en_cours'; // "Démarrer"
         if (count('IN_TRANSIT') > 0)
             return 'en_cours';
         if (total > 0 && count('RECEIVED') === 0)
             return count('DELIVERED') > 0 ? 'livre' : 'annule';
-        if (manualRunning)
-            return 'en_cours';
-        if (manualEnded)
-            return ended;
         return 'en_attente';
     }
     if (manualEnded)

@@ -42,7 +42,8 @@ exports.canView = canView;
 // Mounted on /api/trips (before the main trips router) so it serves:
 //   GET  /api/trips/tracking/mine              → driver's trip currently en_cours (any type)
 //   GET  /api/trips/:tripId/tracking           → status (+ last position if allowed)
-//   POST /api/trips/:tripId/tracking/start     → driver: "Démarrer le trajet"
+//   PUT  /api/trips/:tripId/start              → driver: "Démarrer" (en_attente → en_cours, returns the trip)
+//   POST /api/trips/:tripId/tracking/start     → driver: "Démarrer le trajet" (legacy, no status check)
 //   POST /api/trips/:tripId/tracking/stop      → driver: end live tracking { status?: livre|annule }
 //   GET  /api/trips/:tripId/route              → traveled path [[lat,lng],…] (public while en_cours)
 //   POST /api/trips/:tripId/location           → transporter pushes { lat, lng, speed?, heading? }
@@ -126,6 +127,20 @@ const lower = (t) => (t ? { ...t, type: String(t.type).toLowerCase() } : null);
 exports.router.get('/tracking/mine', exports.trackingLimiter, auth_1.authenticate, async (req, res) => {
     const me = req.user.id;
     try {
+        // 1. Trip the driver just started with "Démarrer" (newest first) — any type.
+        const started = (0, liveTracking_1.manualRunningTripIds)();
+        if (started.length) {
+            const mineStarted = await db_1.default.trip.findMany({
+                where: { id: { in: started.slice(0, 50) }, operatorId: me, status: { not: 'COMPLETED' } },
+                select: tripSelect,
+            });
+            for (const id of started) {
+                const trip = mineStarted.find(t => t.id === id);
+                if (trip && (await (0, liveTracking_1.getTrackingStatus)(id)) === 'en_cours')
+                    return res.json({ trip: lower(trip) });
+            }
+        }
+        // 2. Transporter with a parcel in transit.
         const shipment = await db_1.default.shipment.findFirst({
             where: { status: 'IN_TRANSIT', trip: { operatorId: me } },
             orderBy: { updatedAt: 'desc' },
@@ -180,6 +195,35 @@ async function ownTrip(req, res) {
     }
     return trip;
 }
+// "Démarrer": en_attente → en_cours (shows LIVE in search + on the live map, starts GPS).
+exports.router.put('/:tripId/start', exports.trackingLimiter, auth_1.authenticate, async (req, res) => {
+    try {
+        if (!(await ownTrip(req, res)))
+            return;
+        const tripId = req.params.tripId;
+        const trip = await db_1.default.trip.findUnique({
+            where: { id: tripId },
+            select: { ...tripSelect, status: true, operatorId: true, operatorName: true, arrivalTime: true, operator: { select: { role: true } } },
+        });
+        if (!trip)
+            return res.status(404).json({ message: 'Trip not found' });
+        if ((0, liveTracking_1.isTimetableTrip)(trip)) {
+            return res.status(403).json({ message: 'Les horaires (admin) ne peuvent pas être démarrés', status: 'en_attente' });
+        }
+        const current = await (0, liveTracking_1.getTrackingStatus)(tripId, true);
+        if (current !== 'en_attente') {
+            return res.status(409).json({ message: current === 'en_cours' ? 'Trajet déjà démarré' : 'Trajet terminé ou annulé', status: current });
+        }
+        await (0, liveTracking_1.startTripManually)(tripId);
+        await (0, liveTracking_1.refreshTracking)(tripId);
+        const status = await (0, liveTracking_1.getTrackingStatus)(tripId, true);
+        const { operator, ...rest } = trip;
+        return res.json({ trip: { ...lower(rest), liveStatus: status, isTimetable: false }, status });
+    }
+    catch (e) {
+        return res.status(500).json({ message: 'Server error' });
+    }
+});
 exports.router.post('/:tripId/tracking/start', exports.trackingLimiter, auth_1.authenticate, async (req, res) => {
     try {
         if (!(await ownTrip(req, res)))

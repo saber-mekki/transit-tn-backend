@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { TransportType } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, requireOperator, AuthRequest } from '../middleware/auth';
-import { autoCloseStaleTrips, endTracking, getTrackingStatuses, isTimetableTrip, refreshTracking } from '../utils/liveTracking';
+import { autoCloseStaleTrips, endTracking, endTripManually, getTrackingStatuses, isTimetableTrip, refreshTracking } from '../utils/liveTracking';
 
 export const router = Router();
 
@@ -122,7 +122,8 @@ router.get('/:id', async (req: Request, res: Response) => {
   try {
     const trip = await prisma.trip.findUnique({ where: { id: req.params.id }, include: INCLUDE_ALL });
     if (!trip) return res.status(404).json({ message: 'Trip not found' });
-    return res.json(formatTrip(trip));
+    const liveStatus = (await getTrackingStatuses([trip as any])).get(trip.id) || 'en_attente';
+    return res.json({ ...formatTrip(trip), liveStatus, isTimetable: isTimetableTrip(trip as any) });
   } catch (error) {
     return res.status(500).json({ message: 'Error fetching trip' });
   }
@@ -290,6 +291,8 @@ router.put('/:id/complete', authenticate, async (req: AuthRequest, res: Response
       where: { id: req.params.id },
       data: { status: 'COMPLETED', completedAt: new Date() }
     });
+    // "Terminer" ends live tracking for every type (transporter parcels included).
+    await endTripManually(req.params.id, 'livre');
     // Auto-update linked shipments to IN_TRANSIT
     await prisma.shipment.updateMany({
       where: { tripId: req.params.id, status: 'RECEIVED' },

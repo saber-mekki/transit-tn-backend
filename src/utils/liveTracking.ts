@@ -92,6 +92,14 @@ async function saveManual(tripId: string, m: Manual) {
 export async function startTripManually(tripId: string) {
   await saveManual(tripId, { startedAt: new Date(), endedAt: null, endStatus: null });
 }
+/** Trips started by hand and not ended, newest first (from memory — works without the TripTracking table). */
+export function manualRunningTripIds(): string[] {
+  const running: { id: string; at: number }[] = [];
+  for (const [id, m] of manualCache) {
+    if (m?.startedAt && !(m.endedAt && m.endedAt >= m.startedAt)) running.push({ id, at: new Date(m.startedAt).getTime() });
+  }
+  return running.sort((a, b) => b.at - a.at).map(r => r.id); // most recently started first
+}
 /** Driver pressed "Terminer" / trip cancelled. */
 export async function endTripManually(tripId: string, status: 'livre' | 'annule') {
   const prev = await getManual(tripId);
@@ -122,7 +130,7 @@ type ShipmentCounts = Record<string, number>; // shipment status → count
 
 /**
  * Trip tracking status — derived from statuses only, never from elapsed time:
- *  TRANSPORTER — from its parcels:
+ *  TRANSPORTER — "Terminer"/"Annuler" first, then "Démarrer", then its parcels:
  *   - en_cours   → at least one shipment IN_TRANSIT (or started manually while parcels wait)
  *   - livre      → every shipment closed, at least one DELIVERED
  *   - annule     → every shipment CANCELLED
@@ -141,10 +149,11 @@ export function deriveStatus(trip: StatusTrip, manual: Manual | null, counts: Sh
   if (String(trip.type) === 'TRANSPORTER') {
     const count = (s: string) => counts[s] || 0;
     const total = Object.values(counts).reduce((n, c) => n + c, 0);
+    if (manualEnded) return ended;              // "Terminer" / "Annuler" always wins
+    if (isTimetableTrip(trip)) return 'en_attente';
+    if (manualRunning) return 'en_cours';       // "Démarrer"
     if (count('IN_TRANSIT') > 0) return 'en_cours';
     if (total > 0 && count('RECEIVED') === 0) return count('DELIVERED') > 0 ? 'livre' : 'annule';
-    if (manualRunning) return 'en_cours';
-    if (manualEnded) return ended;
     return 'en_attente';
   }
   if (manualEnded) return ended;
