@@ -1,92 +1,203 @@
+// ─── AI CHAT (Recherche IA / Guide touristique) — Groq ─────────────────
+// POST /api/ai/chat { messages: [{role, content}], mode?: 'trip' | 'tour', lang? }
+//   → { content: [{ type: 'text', text }] }
+//
+// Model: GROQ_MODEL if set, else the first available model from PREFERRED_MODELS
+// (checked against the account's /models list). If Groq says a model doesn't
+// exist / is decommissioned / not allowed, the next one is tried automatically —
+// a retired model no longer breaks the chatbot.
 import { Router, Request, Response } from 'express';
 import prisma from '../db';
 
 export const router = Router();
 
+const GROQ_BASE = (process.env.GROQ_API_BASE || 'https://api.groq.com/openai/v1').replace(/\/$/, '');
+const PREFERRED_MODELS = [
+  'llama-3.3-70b-versatile',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'meta-llama/llama-4-maverick-17b-128e-instruct',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'qwen/qwen3-32b',
+  'llama-3.1-8b-instant',
+];
+const NOT_CHAT = /whisper|tts|guard|playai|orpheus|distil|embed|compound/i;
+const MAX_MODEL_TRIES = 4;
+const GROQ_TIMEOUT_MS = 25_000;
+const MAX_HISTORY = 12;
+const MAX_MSG_CHARS = 2000;
+
+// ── Model choice (cached) ──
+let workingModel: string | null = null;
+const badModels = new Set<string>();
+let modelList: { ids: string[]; at: number } | null = null;
+
+async function availableModels(apiKey: string): Promise<string[] | null> {
+  if (modelList && Date.now() - modelList.at < 60 * 60 * 1000) return modelList.ids;
+  try {
+    const r = await fetch(`${GROQ_BASE}/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) return null;
+    const d = await r.json() as any;
+    const ids = (d?.data || []).filter((m: any) => m?.id && m.active !== false).map((m: any) => String(m.id));
+    modelList = { ids, at: Date.now() };
+    return ids;
+  } catch {
+    return null;
+  }
+}
+
+async function candidateModels(apiKey: string): Promise<string[]> {
+  const forced = (process.env.GROQ_MODEL || '').trim();
+  const out: string[] = [];
+  const add = (m: string) => { if (m && !badModels.has(m) && !out.includes(m)) out.push(m); };
+  if (forced) add(forced);
+  if (workingModel) add(workingModel);
+  const ids = await availableModels(apiKey);
+  if (ids) {
+    PREFERRED_MODELS.filter(m => ids.includes(m)).forEach(add);
+    ids.filter(m => !NOT_CHAT.test(m)).sort().forEach(add); // anything else that can chat
+  } else {
+    PREFERRED_MODELS.forEach(add); // /models unreachable: try the usual ones
+  }
+  return out.slice(0, MAX_MODEL_TRIES);
+}
+
+const isModelError = (status: number, err: any) => {
+  const msg = String(err?.message || '');
+  return status === 404 || err?.code === 'model_not_found' || err?.code === 'model_decommissioned'
+    || /does not exist|decommissioned|not have access|model.*not.*(found|supported|available)/i.test(msg);
+};
+
+// ── Trips given to the model ──
+const TYPE_WORDS: Record<string, RegExp> = {
+  LOUAGE: /louage|لواج|taxi collectif/i,
+  BUS: /\bbus\b|حافلة|كار|autocar|sntri/i,
+  TRANSPORTER: /transport(eur|er)|colis|fret|freight|شحن|طرد|نقل البضائع/i,
+};
+const norm = (x: string) => x.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+/** Trips that are still bookable (not completed), the ones matching the question first. */
+async function tripsFor(question: string) {
+  const trips = await prisma.trip.findMany({
+    where: { status: { not: 'COMPLETED' } },
+    include: {
+      louageTrip: { include: { station: true } },
+      busTrip: { include: { departureStation: true, arrivalStation: true } },
+      transporterTrip: true,
+    },
+    orderBy: { departureTime: 'asc' },
+    take: 400,
+  });
+  const q = norm(question);
+  const wantedTypes = Object.keys(TYPE_WORDS).filter(k => TYPE_WORDS[k].test(question));
+  const cityHit = (c: string) => norm(c).split(/[,\s-]+/).some(w => w.length >= 3 && q.includes(w));
+  const score = (t: any) =>
+    (cityHit(t.fromCity) ? 3 : 0) + (cityHit(t.toCity) ? 3 : 0) + (wantedTypes.includes(String(t.type)) ? 2 : 0);
+  return trips
+    .map(t => ({ t, s: score(t) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 40)
+    .map(x => x.t);
+}
+
+function tripLine(t: any) {
+  const d = new Date(t.departureTime);
+  const when = d.getFullYear() >= 2099
+    ? 'on demand'
+    : d.toLocaleString('fr-FR', { timeZone: 'Africa/Tunis', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const base = `[${t.type}] ${t.fromCity} → ${t.toCity} | ${t.operatorName} | ${when}`;
+  if (t.louageTrip) {
+    const l = t.louageTrip;
+    return `${base} | ${l.price} TND | seats ${l.availableSeats}/${l.totalSeats} | ${l.isFull ? 'FULL' : 'available'} | station: ${l.station?.name || l.customStationName || 'n/a'}${l.contactInfo ? ` | tel: ${l.contactInfo}` : ''}`;
+  }
+  if (t.busTrip) {
+    const b = t.busTrip;
+    return `${base} | ${b.price ? `${b.price} TND` : 'price n/a'} | seats ${b.availableSeats}/${b.totalSeats} | station: ${b.departureStation?.name || b.customDepartureStationName || 'n/a'}`;
+  }
+  if (t.transporterTrip) {
+    const r = t.transporterTrip;
+    return `${base} | vehicle: ${r.vehicleType || 'n/a'} | space: ${r.availableSpace || 'n/a'}${r.contactInfo ? ` | contact: ${r.contactInfo}` : ''}`;
+  }
+  return base;
+}
+
+const SYSTEM: Record<'trip' | 'tour', string> = {
+  trip: `You are the trip-search assistant of Transit TN (Tunisia). Transport types: louage (shared taxi), bus, transporteur (parcels / freight, also international).
+Answer ONLY from the trips listed below. Never invent trips, prices, times or phone numbers.
+- For "X → Y" questions list the matching trips: type, route, date/time, price, seats/availability, operator, station.
+- If nothing matches exactly, say so and suggest the closest trips (same departure or destination city, or another transport type).
+- Trips marked FULL: say they are full.
+- Use short lines with emoji. Be brief and friendly.
+- Always reply in the SAME language as the user (Arabic, French or English).`,
+  tour: `You are an expert tour guide for Tunisia: cities, Carthage, Bardo Museum, El Djem, Dougga, medinas, food (brik, couscous, harissa, lablabi, makroudh), Sahara tours, Matmata.
+Reply in the SAME language as the user. Use emoji headers. Max 250 words.`,
+};
+
 router.post('/chat', async (req: Request, res: Response) => {
-  const { messages, system, mode } = req.body;
-  if (!messages) return res.status(400).json({ message: 'messages required' });
+  const { messages, system } = req.body || {};
+  if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ message: 'messages required' });
+  // Older apps send only a `system` text: detect the tour-guide mode from it.
+  const mode: 'trip' | 'tour' = req.body?.mode === 'tour' || (!req.body?.mode && /tour guide/i.test(String(system || ''))) ? 'tour' : 'trip';
 
   const apiKey = process.env.GROQ_API_KEY || '';
-  if (!apiKey) return res.status(500).json({ message: 'GROQ_API_KEY not set' });
+  if (!apiKey) {
+    console.error('[ai] GROQ_API_KEY is not set');
+    return res.status(503).json({ message: 'AI service not configured', code: 'ai_unavailable' });
+  }
+
+  const history = messages.slice(-MAX_HISTORY).map((m: any) => ({
+    role: m?.role === 'assistant' ? 'assistant' : 'user',
+    content: String(m?.content ?? '').slice(0, MAX_MSG_CHARS),
+  })).filter((m: any) => m.content.trim());
+  if (!history.length) return res.status(400).json({ message: 'messages required' });
+  const lastUser = [...history].reverse().find((m: any) => m.role === 'user')?.content || '';
 
   try {
-    // ── Fetch real trips from database ──
-    const allTrips = await prisma.trip.findMany({
-      include: {
-        louageTrip: { include: { station: true } },
-        busTrip:    { include: { departureStation: true, arrivalStation: true } },
-        transporterTrip: true,
-      },
-      orderBy: { departureTime: 'asc' },
-      take: 30,
-    });
-
-    // Format trips as readable text for the AI
-    const tripsText = allTrips.map(t => {
-      const base = `[${t.type}] ${t.fromCity}→${t.toCity} | ${t.operatorName} | ${new Date(t.departureTime).toLocaleDateString()}`;
-      if (t.louageTrip) {
-        return `${base} | Price: ${t.louageTrip.price} TND | Seats: ${t.louageTrip.availableSeats}/${t.louageTrip.totalSeats} | ${t.louageTrip.isFull ? 'FULL' : 'AVAILABLE'} | Station: ${t.louageTrip.station?.name || t.louageTrip.customStationName || 'N/A'}`;
-      }
-      if (t.busTrip) {
-        return `${base} | Price: ${t.busTrip.price} TND | Seats: ${t.busTrip.availableSeats}/${t.busTrip.totalSeats} | Station: ${t.busTrip.departureStation?.name || t.busTrip.customDepartureStationName || 'N/A'}`;
-      }
-      if (t.transporterTrip) {
-        return `${base} | Vehicle: ${t.transporterTrip.vehicleType} | Space: ${t.transporterTrip.availableSpace} | Contact: ${t.transporterTrip.contactInfo}`;
-      }
-      return base;
-    }).join('\n');
-
-    // ── Build system prompt with real data ──
-    const enrichedSystem = `${system}
-
-═══════════════════════════════
-REAL TRIPS FROM TRANSIT TN DATABASE (${allTrips.length} trips):
-═══════════════════════════════
-${tripsText || 'No trips available currently.'}
-═══════════════════════════════
-
-INSTRUCTIONS:
-- When user asks for a trip from X to Y, search the trips list above
-- Show matching trips with ALL details (price, seats, time, operator, station)
-- If no exact match, suggest closest alternatives
-- Format results clearly with emoji
-- If trip is FULL, mention it
-- Always reply in the SAME language as the user (Arabic/French/English)
-- Be helpful and friendly`;
-
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
-        messages: [
-          { role: 'system', content: enrichedSystem },
-          ...messages.map((m: any) => ({
-            role: m.role === 'assistant' ? 'assistant' : 'user',
-            content: m.content,
-          })),
-        ],
-        max_tokens: 1000,
-        temperature: 0.3,
-      }),
-    });
-
-    const data = await response.json() as any;
-
-    if (!response.ok) {
-      console.error('Groq error:', data);
-      return res.status(500).json({ message: data.error?.message || 'Groq error' });
+    let sys = SYSTEM[mode];
+    if (mode === 'trip') {
+      const trips = await tripsFor(lastUser);
+      sys += `\n\nTRIPS AVAILABLE NOW (${trips.length}, most relevant first):\n${trips.map(tripLine).join('\n') || 'No trips available right now.'}`;
     }
 
-    const text = data.choices?.[0]?.message?.content || '⚠️ No response.';
-    return res.json({ content: [{ type: 'text', text }] });
-
+    let lastError = 'AI error';
+    for (const model of await candidateModels(apiKey)) {
+      const r = await fetch(`${GROQ_BASE}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'system', content: sys }, ...history],
+          max_tokens: 1000,
+          temperature: 0.3,
+        }),
+        signal: AbortSignal.timeout(GROQ_TIMEOUT_MS),
+      });
+      const data = await r.json().catch(() => ({})) as any;
+      if (r.ok) {
+        if (workingModel !== model) console.log(`[ai] using Groq model ${model}`);
+        workingModel = model;
+        const text = String(data?.choices?.[0]?.message?.content || '')
+          .replace(/<think>[\s\S]*?<\/think>/g, '') // reasoning models
+          .trim() || '⚠️';
+        return res.json({ content: [{ type: 'text', text }], model });
+      }
+      lastError = data?.error?.message || `Groq HTTP ${r.status}`;
+      if (isModelError(r.status, data?.error)) {
+        console.warn(`[ai] model ${model} unavailable: ${lastError}`);
+        badModels.add(model);
+        if (workingModel === model) workingModel = null;
+        continue; // try the next model
+      }
+      console.error('[ai] Groq error:', r.status, lastError);
+      if (r.status === 401) return res.status(503).json({ message: 'AI service key invalid', code: 'ai_unavailable' });
+      if (r.status === 429) return res.status(503).json({ message: 'AI service busy, retry in a moment', code: 'ai_busy' });
+      return res.status(502).json({ message: lastError, code: 'ai_error' });
+    }
+    console.error('[ai] no usable Groq model:', lastError);
+    return res.status(503).json({ message: 'No AI model available', code: 'ai_unavailable' });
   } catch (error: any) {
-    console.error('AI route error:', error.message);
-    return res.status(500).json({ message: error.message });
+    const timeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    console.error('[ai] route error:', error?.message);
+    return res.status(timeout ? 504 : 500).json({ message: timeout ? 'AI timeout' : 'AI route error', code: timeout ? 'ai_timeout' : 'ai_error' });
   }
 });
