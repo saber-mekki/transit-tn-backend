@@ -333,11 +333,8 @@ exports.router.put('/:id/complete', auth_1.authenticate, async (req, res) => {
         });
         // "Terminer" ends live tracking for every type (transporter parcels included).
         await (0, liveTracking_1.endTripManually)(req.params.id, 'livre');
-        // Auto-update linked shipments to IN_TRANSIT
-        await db_1.default.shipment.updateMany({
-            where: { tripId: req.params.id, status: 'RECEIVED' },
-            data: { status: 'IN_TRANSIT' }
-        });
+        // Trip finished → its parcels are delivered ("Livré").
+        await (0, liveTracking_1.syncParcelsWithTrip)(req.params.id, 'livre');
         await (0, liveTracking_1.refreshTracking)(req.params.id);
         return res.json(updated);
     }

@@ -223,6 +223,40 @@ export async function getTrackingStatuses(trips: StatusTrip[]): Promise<Map<stri
   return out;
 }
 
+// ─── Parcels follow their trip ───────────────────
+// Shipment.status: RECEIVED ("Colis enregistré") → IN_TRANSIT ("En cours de
+// transport") → DELIVERED ("Livré"). "En cours de livraison" is shown by the
+// tracking page when the vehicle is near the parcel's destination.
+//   start  → RECEIVED parcels of the trip become IN_TRANSIT
+//   livre  → RECEIVED / IN_TRANSIT parcels become DELIVERED ("Terminer")
+//   annule → IN_TRANSIT parcels go back to RECEIVED (trip cancelled, parcel not sent)
+const PARCEL_SYNC_EVERY_MS = 5 * 60 * 1000;
+const parcelSyncAt = new Map<string, number>();
+export async function syncParcelsWithTrip(tripId: string, event: 'start' | 'livre' | 'annule', force = true): Promise<number> {
+  if (event === 'start' && !force) {
+    const last = parcelSyncAt.get(tripId) || 0;
+    if (Date.now() - last < PARCEL_SYNC_EVERY_MS) return 0;
+  }
+  parcelSyncAt.set(tripId, Date.now());
+  try {
+    const r = event === 'start'
+      ? await prisma.shipment.updateMany({ where: { tripId, status: 'RECEIVED' }, data: { status: 'IN_TRANSIT' } })
+      : event === 'livre'
+        ? await prisma.shipment.updateMany({ where: { tripId, status: { in: ['RECEIVED', 'IN_TRANSIT'] } }, data: { status: 'DELIVERED' } })
+        : await prisma.shipment.updateMany({ where: { tripId, status: 'IN_TRANSIT' }, data: { status: 'RECEIVED' } });
+    if (r.count) statusCache.delete(tripId);
+    return r.count;
+  } catch (e: any) {
+    console.error('[live-tracking] parcel sync failed:', e?.message);
+    return 0;
+  }
+}
+/** When the driver pressed "Démarrer" (null if never / unknown). */
+export async function getStartedAt(tripId: string): Promise<Date | null> {
+  const m = await getManual(tripId);
+  return m?.startedAt ? new Date(m.startedAt) : null;
+}
+
 // ─── Auto-cleanup (safety net) ───────────────────
 // Regular trips whose arrival is more than 14 days in the past and that the
 // driver never ended are marked COMPLETED. Admin timetables are never touched.

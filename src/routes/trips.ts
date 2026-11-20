@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { TransportType } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, requireOperator, AuthRequest } from '../middleware/auth';
-import { autoCloseStaleTrips, endTracking, endTripManually, getTrackingStatuses, isTimetableTrip, refreshTracking } from '../utils/liveTracking';
+import { autoCloseStaleTrips, endTracking, endTripManually, syncParcelsWithTrip, getTrackingStatuses, isTimetableTrip, refreshTracking } from '../utils/liveTracking';
 
 export const router = Router();
 
@@ -293,11 +293,8 @@ router.put('/:id/complete', authenticate, async (req: AuthRequest, res: Response
     });
     // "Terminer" ends live tracking for every type (transporter parcels included).
     await endTripManually(req.params.id, 'livre');
-    // Auto-update linked shipments to IN_TRANSIT
-    await prisma.shipment.updateMany({
-      where: { tripId: req.params.id, status: 'RECEIVED' },
-      data: { status: 'IN_TRANSIT' }
-    });
+    // Trip finished → its parcels are delivered ("Livré").
+    await syncParcelsWithTrip(req.params.id, 'livre');
     await refreshTracking(req.params.id);
     return res.json(updated);
   } catch (e) { return res.status(500).json({ message: 'Server error' }); }

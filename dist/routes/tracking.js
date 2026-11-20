@@ -215,6 +215,7 @@ exports.router.put('/:tripId/start', exports.trackingLimiter, auth_1.authenticat
             return res.status(409).json({ message: current === 'en_cours' ? 'Trajet déjà démarré' : 'Trajet terminé ou annulé', status: current });
         }
         await (0, liveTracking_1.startTripManually)(tripId);
+        await (0, liveTracking_1.syncParcelsWithTrip)(tripId, 'start'); // parcels → "En cours de transport"
         await (0, liveTracking_1.refreshTracking)(tripId);
         const status = await (0, liveTracking_1.getTrackingStatus)(tripId, true);
         const { operator, ...rest } = trip;
@@ -229,6 +230,7 @@ exports.router.post('/:tripId/tracking/start', exports.trackingLimiter, auth_1.a
         if (!(await ownTrip(req, res)))
             return;
         await (0, liveTracking_1.startTripManually)(req.params.tripId);
+        await (0, liveTracking_1.syncParcelsWithTrip)(req.params.tripId, 'start');
         await (0, liveTracking_1.refreshTracking)(req.params.tripId);
         return res.json({ status: await (0, liveTracking_1.getTrackingStatus)(req.params.tripId, true) });
     }
@@ -242,6 +244,7 @@ exports.router.post('/:tripId/tracking/stop', exports.trackingLimiter, smallJson
             return;
         const status = req.body?.status === 'annule' ? 'annule' : 'livre';
         await (0, liveTracking_1.endTripManually)(req.params.tripId, status);
+        await (0, liveTracking_1.syncParcelsWithTrip)(req.params.tripId, status); // livré / back to "enregistré" if cancelled
         // Ending the trip is what removes it from search + live map (status-based visibility).
         await db_1.default.trip.update({ where: { id: req.params.tripId }, data: { status: 'COMPLETED', completedAt: new Date() } });
         await (0, liveTracking_1.refreshTracking)(req.params.tripId);
@@ -329,6 +332,9 @@ exports.router.post('/:tripId/location', exports.trackingLimiter, smallJson, aut
             (0, liveTracking_1.endTracking)(tripId, status);
             return res.status(409).json({ message: 'Trip is not in progress', status });
         }
+        // The vehicle is moving: parcels still "enregistré" (added late, or a trip started
+        // by its departure time) switch to "en cours de transport". Throttled to every 5 min.
+        (0, liveTracking_1.syncParcelsWithTrip)(tripId, 'start', false).catch(() => { });
         const now = new Date().toISOString();
         const loc = { lat, lng, speed, heading, updatedAt: now, timestamp: now };
         (0, liveTracking_1.publishLocation)(tripId, loc, {

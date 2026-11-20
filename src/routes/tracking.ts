@@ -15,7 +15,7 @@ import prisma from '../db';
 import { authenticate, optionalAuth, AuthRequest } from '../middleware/auth';
 import {
   getTrackingStatus, getLocation, publishLocation, endTracking, refreshTracking,
-  startTripManually, endTripManually, getRoute, simplifyRoute, isTimetableTrip, manualRunningTripIds,
+  startTripManually, endTripManually, getRoute, simplifyRoute, isTimetableTrip, manualRunningTripIds, syncParcelsWithTrip,
   addStream, removeStream, sendEvent, streamCount, MAX_STREAMS_PER_TRIP,
   addMapStream, removeMapStream, mapStreamCount, liveSnapshot, MAX_MAP_STREAMS,
 } from '../utils/liveTracking';
@@ -178,6 +178,7 @@ router.put('/:tripId/start', trackingLimiter, authenticate, async (req: AuthRequ
       return res.status(409).json({ message: current === 'en_cours' ? 'Trajet déjà démarré' : 'Trajet terminé ou annulé', status: current });
     }
     await startTripManually(tripId);
+    await syncParcelsWithTrip(tripId, 'start'); // parcels → "En cours de transport"
     await refreshTracking(tripId);
     const status = await getTrackingStatus(tripId, true);
     const { operator, ...rest } = trip as any;
@@ -191,6 +192,7 @@ router.post('/:tripId/tracking/start', trackingLimiter, authenticate, async (req
   try {
     if (!(await ownTrip(req, res))) return;
     await startTripManually(req.params.tripId);
+    await syncParcelsWithTrip(req.params.tripId, 'start');
     await refreshTracking(req.params.tripId);
     return res.json({ status: await getTrackingStatus(req.params.tripId, true) });
   } catch (e) {
@@ -203,6 +205,7 @@ router.post('/:tripId/tracking/stop', trackingLimiter, smallJson, authenticate, 
     if (!(await ownTrip(req, res))) return;
     const status = req.body?.status === 'annule' ? 'annule' : 'livre';
     await endTripManually(req.params.tripId, status);
+    await syncParcelsWithTrip(req.params.tripId, status); // livré / back to "enregistré" if cancelled
     // Ending the trip is what removes it from search + live map (status-based visibility).
     await prisma.trip.update({ where: { id: req.params.tripId }, data: { status: 'COMPLETED', completedAt: new Date() } });
     await refreshTracking(req.params.tripId);
@@ -289,6 +292,9 @@ router.post('/:tripId/location', trackingLimiter, smallJson, authenticate, async
       endTracking(tripId, status);
       return res.status(409).json({ message: 'Trip is not in progress', status });
     }
+    // The vehicle is moving: parcels still "enregistré" (added late, or a trip started
+    // by its departure time) switch to "en cours de transport". Throttled to every 5 min.
+    syncParcelsWithTrip(tripId, 'start', false).catch(() => {});
     const now = new Date().toISOString();
     const loc = { lat, lng, speed, heading, updatedAt: now, timestamp: now };
     publishLocation(tripId, loc, {

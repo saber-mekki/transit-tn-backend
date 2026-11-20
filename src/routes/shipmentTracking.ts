@@ -8,7 +8,7 @@ import prisma from '../db';
 import { AuthRequest } from '../middleware/auth';
 import { trackingLimiter } from './tracking';
 import {
-  getTrackingStatus, getLocation, getRoute, simplifyRoute,
+  getTrackingStatus, getLocation, getRoute, simplifyRoute, syncParcelsWithTrip, getStartedAt,
   addStream, removeStream, sendEvent, streamCount, MAX_STREAMS_PER_TRIP,
 } from '../utils/liveTracking';
 
@@ -34,6 +34,15 @@ async function loadTracking(trackingNumber: string) {
       })
     : null;
   const tripStatus = trip ? await getTrackingStatus(trip.id) : null;
+  // Trip already running but this parcel still "enregistré" (e.g. started before the
+  // parcel sync existed): bring the trip's parcels up to date now.
+  if (trip && tripStatus === 'en_cours' && shipment.status === 'RECEIVED') {
+    await syncParcelsWithTrip(trip.id, 'start');
+    shipment.status = 'IN_TRANSIT';
+  }
+  const transportStartedAt = trip && shipment.status !== 'RECEIVED'
+    ? (await getStartedAt(trip.id)) || (tripStatus === 'en_cours' ? trip.departureTime : null)
+    : null;
   const live = !!trip && tripStatus === 'en_cours' && shipment.status === 'IN_TRANSIT';
   const showRoute = !!trip && (shipment.status === 'IN_TRANSIT' || shipment.status === 'DELIVERED');
   const route = showRoute ? simplifyRoute(await getRoute(trip!.id)) : [];
@@ -45,6 +54,7 @@ async function loadTracking(trackingNumber: string) {
       operatorName: operator?.displayName || trip?.operatorName || null,
       // No deliveredAt column: the last update of a delivered parcel is its delivery.
       deliveredAt: shipment.status === 'DELIVERED' ? shipment.updatedAt : null,
+      transportStartedAt,
     },
     trip: trip ? { ...trip, type: String(trip.type).toLowerCase() } : null,
     tripStatus,
@@ -85,6 +95,10 @@ router.get('/:trackingNumber/stream', trackingLimiter, async (req: AuthRequest, 
     res.write('retry: 5000\n\n');
 
     const status = tripId ? await getTrackingStatus(tripId) : null;
+    if (tripId && status === 'en_cours' && shipment.status === 'RECEIVED') {
+      await syncParcelsWithTrip(tripId, 'start');
+      shipment.status = 'IN_TRANSIT';
+    }
     sendEvent(res, 'status', { status, shipmentStatus: shipment.status });
     if (!tripId || status !== 'en_cours' || shipment.status !== 'IN_TRANSIT') {
       sendEvent(res, 'end', { status, shipmentStatus: shipment.status });

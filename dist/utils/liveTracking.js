@@ -12,6 +12,8 @@ exports.isTimetableTrip = isTimetableTrip;
 exports.deriveStatus = deriveStatus;
 exports.getTrackingStatus = getTrackingStatus;
 exports.getTrackingStatuses = getTrackingStatuses;
+exports.syncParcelsWithTrip = syncParcelsWithTrip;
+exports.getStartedAt = getStartedAt;
 exports.autoCloseStaleTrips = autoCloseStaleTrips;
 exports.distanceKm = distanceKm;
 exports.getRoute = getRoute;
@@ -210,6 +212,42 @@ async function getTrackingStatuses(trips) {
         statusCache.set(t.id, { status, at: now });
     }
     return out;
+}
+// ─── Parcels follow their trip ───────────────────
+// Shipment.status: RECEIVED ("Colis enregistré") → IN_TRANSIT ("En cours de
+// transport") → DELIVERED ("Livré"). "En cours de livraison" is shown by the
+// tracking page when the vehicle is near the parcel's destination.
+//   start  → RECEIVED parcels of the trip become IN_TRANSIT
+//   livre  → RECEIVED / IN_TRANSIT parcels become DELIVERED ("Terminer")
+//   annule → IN_TRANSIT parcels go back to RECEIVED (trip cancelled, parcel not sent)
+const PARCEL_SYNC_EVERY_MS = 5 * 60 * 1000;
+const parcelSyncAt = new Map();
+async function syncParcelsWithTrip(tripId, event, force = true) {
+    if (event === 'start' && !force) {
+        const last = parcelSyncAt.get(tripId) || 0;
+        if (Date.now() - last < PARCEL_SYNC_EVERY_MS)
+            return 0;
+    }
+    parcelSyncAt.set(tripId, Date.now());
+    try {
+        const r = event === 'start'
+            ? await db_1.default.shipment.updateMany({ where: { tripId, status: 'RECEIVED' }, data: { status: 'IN_TRANSIT' } })
+            : event === 'livre'
+                ? await db_1.default.shipment.updateMany({ where: { tripId, status: { in: ['RECEIVED', 'IN_TRANSIT'] } }, data: { status: 'DELIVERED' } })
+                : await db_1.default.shipment.updateMany({ where: { tripId, status: 'IN_TRANSIT' }, data: { status: 'RECEIVED' } });
+        if (r.count)
+            statusCache.delete(tripId);
+        return r.count;
+    }
+    catch (e) {
+        console.error('[live-tracking] parcel sync failed:', e?.message);
+        return 0;
+    }
+}
+/** When the driver pressed "Démarrer" (null if never / unknown). */
+async function getStartedAt(tripId) {
+    const m = await getManual(tripId);
+    return m?.startedAt ? new Date(m.startedAt) : null;
 }
 // ─── Auto-cleanup (safety net) ───────────────────
 // Regular trips whose arrival is more than 14 days in the past and that the
