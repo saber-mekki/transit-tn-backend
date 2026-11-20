@@ -15,7 +15,7 @@ const INCLUDE_ALL = {
     busTrip: { include: { departureStation: true, arrivalStation: true } },
     transporterTrip: true,
     ratings: { select: { score: true } },
-    operator: { select: { id: true, displayName: true, operatorRatings: { select: { score: true } } } },
+    operator: { select: { id: true, displayName: true, role: true, operatorRatings: { select: { score: true } } } },
 };
 function formatTrip(trip) {
     if (!trip)
@@ -67,6 +67,7 @@ exports.router.get('/', async (req, res) => {
     if (toCity)
         where.toCity = { contains: toCity, mode: 'insensitive' };
     try {
+        await (0, liveTracking_1.autoCloseStaleTrips)(); // arrival > 14 days ago and never ended → COMPLETED (throttled)
         const sortByVal = sortBy || 'time';
         const orderByClause = sortByVal === 'time' ? { departureTime: 'asc' } : { createdAt: 'asc' };
         const [trips, total] = await Promise.all([
@@ -76,7 +77,8 @@ exports.router.get('/', async (req, res) => {
         // liveStatus: en_attente | en_cours (→ LIVE badge, live map) | livre | annule
         const statuses = await (0, liveTracking_1.getTrackingStatuses)(trips);
         let formatted = trips
-            .map(t => ({ ...formatTrip(t), liveStatus: statuses.get(t.id) || 'en_attente' }))
+            // isTimetable: admin schedule → shown in search without LIVE, never on the live map
+            .map(t => ({ ...formatTrip(t), liveStatus: statuses.get(t.id) || 'en_attente', isTimetable: (0, liveTracking_1.isTimetableTrip)(t) }))
             // louage/bus ended with "Terminer" (TripTracking) but not yet COMPLETED
             .filter((t) => t.type === 'transporter' || (t.liveStatus !== 'livre' && t.liveStatus !== 'annule'));
         if (minPrice)

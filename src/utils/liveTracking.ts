@@ -106,7 +106,18 @@ export function tripWindow(dep: Date) {
   return { start: dep.getTime() - WINDOW_BEFORE_MS };
 }
 
-type StatusTrip = { id: string; type: any; status: any; departureTime: Date | string };
+type StatusTrip = {
+  id: string; type: any; status: any; departureTime: Date | string;
+  operatorName?: string | null; operator?: { role?: any } | null;
+};
+
+/**
+ * Admin timetable trips (public schedules imported by an admin, e.g. SNTRI buses)
+ * are informational only: never "en_cours", never LIVE, never on the live map.
+ */
+export function isTimetableTrip(trip: { operatorName?: string | null; operator?: { role?: any } | null }) {
+  return String(trip.operator?.role || '') === 'ADMIN' || String(trip.operatorName || '').trim().toLowerCase() === 'admin';
+}
 type ShipmentCounts = Record<string, number>; // shipment status → count
 
 /**
@@ -120,6 +131,7 @@ type ShipmentCounts = Record<string, number>; // shipment status → count
  *   - livre/annule → "Terminer" pressed, or trip marked COMPLETED
  *   - en_cours     → "Démarrer" pressed, or departure time reached (stays en_cours if late)
  *   - en_attente   → before departure
+ *  Admin timetable trips: always en_attente (informational) unless ended.
  */
 export function deriveStatus(trip: StatusTrip, manual: Manual | null, counts: ShipmentCounts, now = Date.now()): TrackingStatus {
   const manualEnded = !!manual?.endedAt && (!manual.startedAt || manual.endedAt >= manual.startedAt);
@@ -137,6 +149,7 @@ export function deriveStatus(trip: StatusTrip, manual: Manual | null, counts: Sh
   }
   if (manualEnded) return ended;
   if (String(trip.status) === 'COMPLETED') return 'livre';
+  if (isTimetableTrip(trip)) return 'en_attente';
   if (manualRunning) return 'en_cours';
   return now >= tripWindow(new Date(trip.departureTime)).start ? 'en_cours' : 'en_attente';
 }
@@ -148,7 +161,7 @@ export async function getTrackingStatus(tripId: string, fresh = false): Promise<
 
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
-    select: { id: true, type: true, status: true, departureTime: true },
+    select: { id: true, type: true, status: true, departureTime: true, operatorName: true, operator: { select: { role: true } } },
   });
   let status: TrackingStatus | null = null;
   if (trip) {
@@ -200,6 +213,47 @@ export async function getTrackingStatuses(trips: StatusTrip[]): Promise<Map<stri
   }
   return out;
 }
+
+// ─── Auto-cleanup (safety net) ───────────────────
+// Regular trips whose arrival is more than 14 days in the past and that the
+// driver never ended are marked COMPLETED. Admin timetables are never touched.
+export const STALE_TRIP_DAYS = 14;
+const CLEANUP_EVERY_MS = 10 * 60 * 1000;
+let lastCleanup = 0;
+let cleanupRunning: Promise<number> | null = null;
+export function autoCloseStaleTrips(force = false): Promise<number> {
+  if (cleanupRunning) return cleanupRunning;
+  if (!force && Date.now() - lastCleanup < CLEANUP_EVERY_MS) return Promise.resolve(0);
+  lastCleanup = Date.now();
+  cleanupRunning = (async () => {
+    try {
+      const cutoff = new Date(Date.now() - STALE_TRIP_DAYS * 24 * 3600_000);
+      const stale = await prisma.trip.findMany({
+        where: {
+          status: { not: 'COMPLETED' },
+          arrivalTime: { lt: cutoff },
+          operator: { role: { not: 'ADMIN' } },
+          NOT: { operatorName: { equals: 'admin', mode: 'insensitive' } },
+        },
+        select: { id: true },
+        take: 500,
+      });
+      if (!stale.length) return 0;
+      const ids = stale.map(t => t.id);
+      await prisma.trip.updateMany({ where: { id: { in: ids } }, data: { status: 'COMPLETED', completedAt: new Date() } });
+      for (const id of ids) { statusCache.delete(id); if (locations.has(id)) endTracking(id, 'livre'); }
+      console.log(`[live-tracking] auto-closed ${ids.length} trip(s) ended > ${STALE_TRIP_DAYS} days ago`);
+      return ids.length;
+    } catch (e: any) {
+      console.error('[live-tracking] auto-cleanup failed:', e?.message);
+      return 0;
+    } finally {
+      cleanupRunning = null;
+    }
+  })();
+  return cleanupRunning;
+}
+setInterval(() => { autoCloseStaleTrips(); }, 60 * 60 * 1000).unref();
 
 // ─── Route history ───────────────────────────────
 const MAX_ROUTE_POINTS = 3000;

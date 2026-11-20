@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { TransportType } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, requireOperator, AuthRequest } from '../middleware/auth';
-import { endTracking, getTrackingStatuses, refreshTracking } from '../utils/liveTracking';
+import { autoCloseStaleTrips, endTracking, getTrackingStatuses, isTimetableTrip, refreshTracking } from '../utils/liveTracking';
 
 export const router = Router();
 
@@ -11,7 +11,7 @@ const INCLUDE_ALL = {
   busTrip: { include: { departureStation: true, arrivalStation: true } },
   transporterTrip: true,
   ratings: { select: { score: true } },
-  operator: { select: { id: true, displayName: true, operatorRatings: { select: { score: true } } } },
+  operator: { select: { id: true, displayName: true, role: true, operatorRatings: { select: { score: true } } } },
 };
 
 function formatTrip(trip: any) {
@@ -59,6 +59,7 @@ router.get('/', async (req: Request, res: Response) => {
   if (fromCity) where.fromCity = { contains: fromCity as string, mode: 'insensitive' };
   if (toCity)   where.toCity   = { contains: toCity   as string, mode: 'insensitive' };
   try {
+    await autoCloseStaleTrips(); // arrival > 14 days ago and never ended → COMPLETED (throttled)
     const sortByVal = (sortBy as string) || 'time';
     const orderByClause: any = sortByVal === 'time' ? { departureTime: 'asc' } : { createdAt: 'asc' };
     const [trips, total] = await Promise.all([
@@ -68,7 +69,8 @@ router.get('/', async (req: Request, res: Response) => {
     // liveStatus: en_attente | en_cours (→ LIVE badge, live map) | livre | annule
     const statuses = await getTrackingStatuses(trips as any);
     let formatted = trips
-      .map(t => ({ ...formatTrip(t), liveStatus: statuses.get(t.id) || 'en_attente' }))
+      // isTimetable: admin schedule → shown in search without LIVE, never on the live map
+      .map(t => ({ ...formatTrip(t), liveStatus: statuses.get(t.id) || 'en_attente', isTimetable: isTimetableTrip(t as any) }))
       // louage/bus ended with "Terminer" (TripTracking) but not yet COMPLETED
       .filter((t: any) => t.type === 'transporter' || (t.liveStatus !== 'livre' && t.liveStatus !== 'annule'));
     if (minPrice) formatted = formatted.filter((t: any) => !t.price || t.price >= parseFloat(minPrice as string));

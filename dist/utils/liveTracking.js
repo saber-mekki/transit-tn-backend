@@ -3,13 +3,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_MAP_STREAMS = exports.MAX_STREAMS_PER_TRIP = void 0;
+exports.STALE_TRIP_DAYS = exports.MAX_MAP_STREAMS = exports.MAX_STREAMS_PER_TRIP = void 0;
 exports.startTripManually = startTripManually;
 exports.endTripManually = endTripManually;
 exports.tripWindow = tripWindow;
+exports.isTimetableTrip = isTimetableTrip;
 exports.deriveStatus = deriveStatus;
 exports.getTrackingStatus = getTrackingStatus;
 exports.getTrackingStatuses = getTrackingStatuses;
+exports.autoCloseStaleTrips = autoCloseStaleTrips;
 exports.distanceKm = distanceKm;
 exports.getRoute = getRoute;
 exports.simplifyRoute = simplifyRoute;
@@ -91,6 +93,13 @@ function tripWindow(dep) {
     return { start: dep.getTime() - WINDOW_BEFORE_MS };
 }
 /**
+ * Admin timetable trips (public schedules imported by an admin, e.g. SNTRI buses)
+ * are informational only: never "en_cours", never LIVE, never on the live map.
+ */
+function isTimetableTrip(trip) {
+    return String(trip.operator?.role || '') === 'ADMIN' || String(trip.operatorName || '').trim().toLowerCase() === 'admin';
+}
+/**
  * Trip tracking status — derived from statuses only, never from elapsed time:
  *  TRANSPORTER — from its parcels:
  *   - en_cours   → at least one shipment IN_TRANSIT (or started manually while parcels wait)
@@ -101,6 +110,7 @@ function tripWindow(dep) {
  *   - livre/annule → "Terminer" pressed, or trip marked COMPLETED
  *   - en_cours     → "Démarrer" pressed, or departure time reached (stays en_cours if late)
  *   - en_attente   → before departure
+ *  Admin timetable trips: always en_attente (informational) unless ended.
  */
 function deriveStatus(trip, manual, counts, now = Date.now()) {
     const manualEnded = !!manual?.endedAt && (!manual.startedAt || manual.endedAt >= manual.startedAt);
@@ -123,6 +133,8 @@ function deriveStatus(trip, manual, counts, now = Date.now()) {
         return ended;
     if (String(trip.status) === 'COMPLETED')
         return 'livre';
+    if (isTimetableTrip(trip))
+        return 'en_attente';
     if (manualRunning)
         return 'en_cours';
     return now >= tripWindow(new Date(trip.departureTime)).start ? 'en_cours' : 'en_attente';
@@ -134,7 +146,7 @@ async function getTrackingStatus(tripId, fresh = false) {
         return cached.status;
     const trip = await db_1.default.trip.findUnique({
         where: { id: tripId },
-        select: { id: true, type: true, status: true, departureTime: true },
+        select: { id: true, type: true, status: true, departureTime: true, operatorName: true, operator: { select: { role: true } } },
     });
     let status = null;
     if (trip) {
@@ -187,6 +199,55 @@ async function getTrackingStatuses(trips) {
     }
     return out;
 }
+// ─── Auto-cleanup (safety net) ───────────────────
+// Regular trips whose arrival is more than 14 days in the past and that the
+// driver never ended are marked COMPLETED. Admin timetables are never touched.
+exports.STALE_TRIP_DAYS = 14;
+const CLEANUP_EVERY_MS = 10 * 60 * 1000;
+let lastCleanup = 0;
+let cleanupRunning = null;
+function autoCloseStaleTrips(force = false) {
+    if (cleanupRunning)
+        return cleanupRunning;
+    if (!force && Date.now() - lastCleanup < CLEANUP_EVERY_MS)
+        return Promise.resolve(0);
+    lastCleanup = Date.now();
+    cleanupRunning = (async () => {
+        try {
+            const cutoff = new Date(Date.now() - exports.STALE_TRIP_DAYS * 24 * 3600000);
+            const stale = await db_1.default.trip.findMany({
+                where: {
+                    status: { not: 'COMPLETED' },
+                    arrivalTime: { lt: cutoff },
+                    operator: { role: { not: 'ADMIN' } },
+                    NOT: { operatorName: { equals: 'admin', mode: 'insensitive' } },
+                },
+                select: { id: true },
+                take: 500,
+            });
+            if (!stale.length)
+                return 0;
+            const ids = stale.map(t => t.id);
+            await db_1.default.trip.updateMany({ where: { id: { in: ids } }, data: { status: 'COMPLETED', completedAt: new Date() } });
+            for (const id of ids) {
+                statusCache.delete(id);
+                if (locations.has(id))
+                    endTracking(id, 'livre');
+            }
+            console.log(`[live-tracking] auto-closed ${ids.length} trip(s) ended > ${exports.STALE_TRIP_DAYS} days ago`);
+            return ids.length;
+        }
+        catch (e) {
+            console.error('[live-tracking] auto-cleanup failed:', e?.message);
+            return 0;
+        }
+        finally {
+            cleanupRunning = null;
+        }
+    })();
+    return cleanupRunning;
+}
+setInterval(() => { autoCloseStaleTrips(); }, 60 * 60 * 1000).unref();
 // ─── Route history ───────────────────────────────
 const MAX_ROUTE_POINTS = 3000;
 const MIN_ROUTE_STEP_KM = 0.03;
