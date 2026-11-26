@@ -66,7 +66,7 @@ app.get('/health', (_req, res) => {
 // ─── API ROUTES ──────────────────────────────────
 app.use('/api/auth',          authLimiter, authRoutes);
 app.use('/api/ai',            aiRoutes);
-app.use('/api/verify',         verifyRoutes);
+app.use('/api/verify',         authLimiter, verifyRoutes);
 app.use('/api/banners',        bannerRoutes);
 app.use('/api/operators',      operatorRatingRoutes);
 app.use('/api/reservations',   reservationRoutes);

@@ -1,17 +1,14 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { sendEmail } from '../utils/sendEmail';
+import { createEmailCode, checkEmailCode } from '../utils/emailCode';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 router.post('/send-code', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ message: 'Email required' });
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await prisma.emailVerification.create({ data: { email, code, expiresAt } });
+    const code = await createEmailCode(email);
     await sendEmail(
       email,
       'رمز التحقق - Transit TN',
@@ -33,12 +30,9 @@ router.post('/verify-code', async (req, res) => {
   try {
     const { email, code } = req.body;
     if (!email || !code) return res.status(400).json({ message: 'Email and code required' });
-    const record = await prisma.emailVerification.findFirst({
-      where: { email, code, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: 'desc' }
-    });
-    if (!record) return res.status(400).json({ message: 'Invalid or expired code' });
-    await prisma.emailVerification.deleteMany({ where: { email } });
+    // purpose 'reset': the same code must still be sent to /api/auth/reset-password, so keep it
+    const ok = await checkEmailCode(email, code, req.body.purpose !== 'reset');
+    if (!ok) return res.status(400).json({ message: 'Invalid or expired code' });
     return res.json({ message: 'Verified' });
   } catch (e) {
     return res.status(500).json({ message: 'Server error' });

@@ -6,6 +6,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { UserRole } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, generateToken, AuthRequest } from '../middleware/auth';
+import { checkEmailCode, normalizeEmail } from '../utils/emailCode';
 
 export const router = Router();
 
@@ -167,7 +168,7 @@ router.post('/google', async (req: Request, res: Response) => {
       while (await prisma.user.findUnique({ where: { username } })) {
         username = `${baseUsername}${count++}`;
       }
-      // Unusable random password: the account signs in with Google (or via reset-password)
+      // Unusable random password: the account signs in with Google (or after an emailed-code reset)
       const randomPw = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
       user = await prisma.user.create({
         data: {
@@ -209,16 +210,19 @@ router.post('/google', async (req: Request, res: Response) => {
 
 
 // ─── POST /api/auth/reset-password ────────────────
+// Requires the code emailed by /api/verify/send-code: proves the caller owns the address.
 router.post('/reset-password', async (req: Request, res: Response) => {
-  const { email, newPassword } = req.body;
-  if (!email || !newPassword) {
-    return res.status(400).json({ message: 'Email and new password required' });
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ message: 'Email, code and new password required' });
   }
-  if (newPassword.length < 8) {
+  if (typeof newPassword !== 'string' || newPassword.length < 8) {
     return res.status(400).json({ message: 'Password must be at least 8 characters' });
   }
   try {
-    const user = await prisma.user.findFirst({ where: { OR: [{ email }, { username: email }] } });
+    const ok = await checkEmailCode(email, String(code), true);
+    if (!ok) return res.status(400).json({ message: 'Invalid or expired code' });
+    const user = await prisma.user.findFirst({ where: { email: { equals: normalizeEmail(email), mode: 'insensitive' } } });
     if (!user) return res.status(404).json({ message: 'User not found' });
     const hashed = await bcrypt.hash(newPassword, 12);
     await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
