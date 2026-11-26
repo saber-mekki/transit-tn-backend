@@ -99,7 +99,11 @@ router.post('/login', async (req: Request, res: Response) => {
 
 
 // ─── POST /api/auth/google ────────────────────────
-// Body: { idToken, role? }  role = "USER" | "OPERATOR" (only used when creating a new account)
+// Body: { idToken, role?, requireRole? }
+//   role = "USER" | "OPERATOR": used only when creating a new account (existing roles never change)
+//   requireRole = true (login screen): if no account exists and no role was sent, nothing is
+//     created and { needsRole: true } is returned so the app can ask Utilisateur / Opérateur first.
+//   Neither sent (older app versions): new accounts are created as USER.
 // Accepted audiences: every OAuth client the apps may obtain an ID token for.
 // Native google-signin and the web flow both issue tokens whose `aud` is the WEB client ID.
 const GOOGLE_CLIENT_IDS = Array.from(new Set([
@@ -123,7 +127,9 @@ async function verifyGoogleIdToken(idToken: string) {
 router.post('/google', async (req: Request, res: Response) => {
   const { idToken } = req.body;
   if (!idToken || typeof idToken !== 'string') return res.status(400).json({ message: 'idToken required' });
-  const requestedRole = typeof req.body.role === 'string' ? req.body.role.toUpperCase() : 'USER';
+  const roleProvided = typeof req.body.role === 'string' && req.body.role !== '';
+  const requireRole = req.body.requireRole === true;
+  const requestedRole = roleProvided ? req.body.role.toUpperCase() : 'USER';
   if (!['USER', 'OPERATOR'].includes(requestedRole)) {
     return res.status(400).json({ message: 'Role must be USER or OPERATOR' });
   }
@@ -143,6 +149,11 @@ router.post('/google', async (req: Request, res: Response) => {
     let user = await prisma.user.findUnique({ where: { googleId } })
       ?? await prisma.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
     const isNewUser = !user;
+
+    if (!user && requireRole && !roleProvided) {
+      // First Google sign-in from the login screen: let the user choose their role before creating anything
+      return res.json({ needsRole: true, email, displayName: displayName || email.split('@')[0] });
+    }
 
     if (user) {
       // Existing account (email/password or Google): link it; never change its role here
