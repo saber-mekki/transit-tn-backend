@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import { OAuth2Client } from 'google-auth-library';
 import { UserRole } from '@prisma/client';
 import prisma from '../db';
 import { authenticate, generateToken, AuthRequest } from '../middleware/auth';
@@ -97,54 +99,90 @@ router.post('/login', async (req: Request, res: Response) => {
 
 
 // ─── POST /api/auth/google ────────────────────────
-// Audience = the web client ID the app passes to GoogleSignin.configure
-const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || '124636272128-eg5v01of98ev5mfb85p8evikqoermofl.apps.googleusercontent.com')
-  .split(',').map(s => s.trim()).filter(Boolean);
+// Body: { idToken, role? }  role = "USER" | "OPERATOR" (only used when creating a new account)
+// Accepted audiences: every OAuth client the apps may obtain an ID token for.
+// Native google-signin and the web flow both issue tokens whose `aud` is the WEB client ID.
+const GOOGLE_CLIENT_IDS = Array.from(new Set([
+  process.env.GOOGLE_WEB_CLIENT_ID,
+  process.env.GOOGLE_ANDROID_CLIENT_ID,
+  process.env.GOOGLE_IOS_CLIENT_ID,
+  ...(process.env.GOOGLE_CLIENT_IDS || '').split(','),
+  // Fallback: current web client, so existing deployments keep working without new env vars
+  '124636272128-eg5v01of98ev5mfb85p8evikqoermofl.apps.googleusercontent.com',
+].map(s => (s || '').trim()).filter(Boolean)));
+
+const googleClient = new OAuth2Client();
 
 async function verifyGoogleIdToken(idToken: string) {
-  const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
-  if (!r.ok) return null;
-  const info: any = await r.json();
-  const issOk = info.iss === 'accounts.google.com' || info.iss === 'https://accounts.google.com';
-  const verified = info.email_verified === true || info.email_verified === 'true';
-  if (!issOk || !GOOGLE_CLIENT_IDS.includes(info.aud) || !verified || !info.email) return null;
-  return { email: String(info.email).toLowerCase(), displayName: info.name as string | undefined };
+  const ticket = await googleClient.verifyIdToken({ idToken, audience: GOOGLE_CLIENT_IDS });
+  const p = ticket.getPayload();
+  if (!p || !p.sub || !p.email || !p.email_verified) return null;
+  return { googleId: p.sub, email: p.email.toLowerCase(), displayName: p.name };
 }
 
 router.post('/google', async (req: Request, res: Response) => {
   const { idToken } = req.body;
   if (!idToken || typeof idToken !== 'string') return res.status(400).json({ message: 'idToken required' });
+  const requestedRole = typeof req.body.role === 'string' ? req.body.role.toUpperCase() : 'USER';
+  if (!['USER', 'OPERATOR'].includes(requestedRole)) {
+    return res.status(400).json({ message: 'Role must be USER or OPERATOR' });
+  }
+
+  let google: Awaited<ReturnType<typeof verifyGoogleIdToken>>;
+  try {
+    google = await verifyGoogleIdToken(idToken);
+  } catch (e) {
+    console.warn('Google token rejected:', (e as Error).message);
+    return res.status(401).json({ message: 'Invalid Google token' });
+  }
+  if (!google) return res.status(401).json({ message: 'Invalid Google token' });
 
   try {
-    const google = await verifyGoogleIdToken(idToken);
-    if (!google) return res.status(401).json({ message: 'Invalid Google token' });
-    const { email, displayName } = google;
+    const { googleId, email, displayName } = google;
 
-    let user = await prisma.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
+    let user = await prisma.user.findUnique({ where: { googleId } })
+      ?? await prisma.user.findFirst({ where: { email: { equals: email, mode: 'insensitive' } } });
     const isNewUser = !user;
-    
-    if (!user) {
-      // Auto-create account
-      const baseUsername = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    if (user) {
+      // Existing account (email/password or Google): link it; never change its role here
+      if (!user.googleId) {
+        user = await prisma.user.update({ where: { id: user.id }, data: { googleId } });
+      }
+    } else {
+      const baseUsername = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '') || 'user';
       let username = baseUsername;
       let count = 1;
       while (await prisma.user.findUnique({ where: { username } })) {
         username = `${baseUsername}${count++}`;
       }
-      const randomPw = await bcrypt.hash(Math.random().toString(36), 12);
+      // Unusable random password: the account signs in with Google (or via reset-password)
+      const randomPw = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
       user = await prisma.user.create({
-        data: { username, password: randomPw, displayName: displayName || email.split('@')[0], role: 'USER', email }
+        data: {
+          username, password: randomPw, email, googleId,
+          displayName: displayName || email.split('@')[0],
+          role: requestedRole as UserRole,
+        },
       });
 
-      // Notify admins
+      const created = user;
+      const roleLabel = created.role === 'OPERATOR' ? '🚗 Driver / Operator' : '👤 Passenger';
       const admins = await prisma.user.findMany({ where: { role: 'ADMIN' } });
       await prisma.notification.createMany({
         data: admins.map(admin => ({
           userId: admin.id,
           type: 'NEW_USER',
-          title: '🆕 New user registered (Google)',
-          message: `👤 Name: ${user!.displayName}\n📧 Email: ${user!.email}\n🔑 Via: Google Sign-In`,
-          data: { userId: user!.id, role: user!.role },
+          title: `🆕 New ${created.role === 'OPERATOR' ? 'Driver / Operator' : 'Passenger'} registered (Google)`,
+          message: [
+            `👤 Name: ${created.displayName}`,
+            `🔑 Username: @${created.username}`,
+            `🎭 Role: ${roleLabel}`,
+            `📧 Email: ${created.email}`,
+            `🔐 Via: Google Sign-In`,
+            `🕐 Joined: ${new Date().toLocaleString()}`,
+          ].join('\n'),
+          data: { userId: created.id, role: created.role, email: created.email },
         })),
       });
     }
